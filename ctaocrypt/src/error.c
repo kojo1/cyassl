@@ -35,7 +35,7 @@
 
 void CTaoCryptErrorString(int error, char* buffer)
 {
-    const int max = MAX_ERROR_SZ;   /* shorthand */
+    const int max = CYASSL_MAX_ERROR_SZ;   /* shorthand */
 
 #ifdef NO_ERROR_STRINGS
 
@@ -64,6 +64,10 @@ void CTaoCryptErrorString(int error, char* buffer)
 
     case RAN_BLOCK_E : 
         XSTRNCPY(buffer, "random device read would block error", max);
+        break;
+
+    case BAD_MUTEX_E : 
+        XSTRNCPY(buffer, "Bad mutex, operation failed", max);
         break;
 
     case MP_INIT_E :
@@ -317,6 +321,26 @@ void CTaoCryptErrorString(int error, char* buffer)
 
     case ASN_OCSP_CONFIRM_E :
         XSTRNCPY(buffer, "ASN OCSP sig error, confirm failure", max);
+        break;
+
+    case BAD_ENC_STATE_E:
+        XSTRNCPY(buffer, "Bad ecc encrypt state operation", max);
+        break;
+
+    case BAD_PADDING_E:
+        XSTRNCPY(buffer, "Bad padding, message wrong length", max);
+        break;
+
+    case REQ_ATTRIBUTE_E:
+        XSTRNCPY(buffer, "Setting cert request attributes error", max);
+        break;
+
+    case PKCS7_OID_E:
+        XSTRNCPY(buffer, "PKCS#7 error: mismatched OID value", max);
+        break;
+
+    case PKCS7_RECIP_E:
+        XSTRNCPY(buffer, "PKCS#7 error: no matching recipient found", max);
         break;
 
     default:

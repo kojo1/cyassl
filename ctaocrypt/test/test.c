@@ -25,6 +25,8 @@
 
 #include <cyassl/ctaocrypt/settings.h>
 
+#ifndef NO_CRYPT_TEST
+
 #ifdef CYASSL_TEST_CERT
     #include <cyassl/ctaocrypt/asn.h>
 #else
@@ -59,6 +61,9 @@
 #ifdef HAVE_LIBZ
     #include <cyassl/ctaocrypt/compress.h>
 #endif
+#ifdef HAVE_PKCS7
+    #include <cyassl/ctaocrypt/pkcs7.h>
+#endif
 
 #ifdef _MSC_VER
     /* 4996 warning to use MS extensions e.g., strcpy_s instead of strncpy */
@@ -72,9 +77,23 @@
     #include <cyassl/openssl/des.h>
 #endif
 
+
 #if defined(USE_CERT_BUFFERS_1024) || defined(USE_CERT_BUFFERS_2048)
     /* include test cert and key buffers for use with NO_FILESYSTEM */
-    #include <cyassl/certs_test.h>
+    #if defined(CYASSL_MDK_ARM)
+        #include "cert_data.h" 
+                        /* use certs_test.c for initial data, so other 
+                                               commands can share the data. */
+    #else
+        #include <cyassl/certs_test.h>
+    #endif
+#endif
+
+#if defined(CYASSL_MDK_ARM)
+        #include <stdio.h>
+        #include <stdlib.h>
+    extern FILE * CyaSSL_fopen(const char *fname, const char *mode) ;
+    #define fopen CyaSSL_fopen
 #endif
 
 #ifdef HAVE_NTRU
@@ -86,14 +105,13 @@
     #include "cavium_ioctl.h"
 #endif
 
-#include <string.h>
 #ifdef FREESCALE_MQX
     #include <mqx.h>
     #include <fio.h>
+    #include <stdlib.h>
 #else
     #include <stdio.h>
 #endif
-#include <stdlib.h>
 
 
 #ifdef THREADX
@@ -125,6 +143,8 @@ int  hmac_sha_test(void);
 int  hmac_sha256_test(void);
 int  hmac_sha384_test(void);
 int  hmac_sha512_test(void);
+int  hmac_blake2b_test(void);
+int  hkdf_test(void);
 int  arc4_test(void);
 int  hc128_test(void);
 int  rabbit_test(void);
@@ -132,6 +152,7 @@ int  des_test(void);
 int  des3_test(void);
 int  aes_test(void);
 int  aesgcm_test(void);
+int  gmac_test(void);
 int  aesccm_test(void);
 int  camellia_test(void);
 int  rsa_test(void);
@@ -146,6 +167,9 @@ int pkcs12_test(void);
 int pbkdf2_test(void);
 #ifdef HAVE_ECC
     int  ecc_test(void);
+    #ifdef HAVE_ECC_ENCRYPT
+        int  ecc_encrypt_test(void);
+    #endif
 #endif
 #ifdef HAVE_BLAKE2
     int  blake2b_test(void);
@@ -153,16 +177,20 @@ int pbkdf2_test(void);
 #ifdef HAVE_LIBZ
     int compress_test(void);
 #endif
+#ifdef HAVE_PKCS7
+    int pkcs7enveloped_test(void);
+    int pkcs7signed_test(void);
+#endif
 
 
 
 static void err_sys(const char* msg, int es)
 {
     printf("%s error = %d\n", msg, es);
-#ifndef THREADX
-    if (msg)
+    #if !defined(THREADX) && !defined(CYASSL_MDK_ARM)
+  	if (msg)
         exit(es);
-#endif
+    #endif
     return;
 }
 
@@ -193,63 +221,63 @@ void ctaocrypt_test(void* args)
 
 
 #ifndef NO_MD5
-    if ( (ret = md5_test()) ) 
+    if ( (ret = md5_test()) != 0) 
         err_sys("MD5      test failed!\n", ret);
     else
         printf( "MD5      test passed!\n");
 #endif
 
 #ifdef CYASSL_MD2
-    if ( (ret = md2_test()) ) 
+    if ( (ret = md2_test()) != 0) 
         err_sys("MD2      test failed!\n", ret);
     else
         printf( "MD2      test passed!\n");
 #endif
 
 #ifndef NO_MD4
-    if ( (ret = md4_test()) ) 
+    if ( (ret = md4_test()) != 0) 
         err_sys("MD4      test failed!\n", ret);
     else
         printf( "MD4      test passed!\n");
 #endif
 
 #ifndef NO_SHA
-    if ( (ret = sha_test()) ) 
+    if ( (ret = sha_test()) != 0) 
         err_sys("SHA      test failed!\n", ret);
     else
         printf( "SHA      test passed!\n");
 #endif
 
 #ifndef NO_SHA256
-    if ( (ret = sha256_test()) ) 
+    if ( (ret = sha256_test()) != 0) 
         err_sys("SHA-256  test failed!\n", ret);
     else
         printf( "SHA-256  test passed!\n");
 #endif
 
 #ifdef CYASSL_SHA384
-    if ( (ret = sha384_test()) ) 
+    if ( (ret = sha384_test()) != 0) 
         err_sys("SHA-384  test failed!\n", ret);
     else
         printf( "SHA-384  test passed!\n");
 #endif
 
 #ifdef CYASSL_SHA512
-    if ( (ret = sha512_test()) ) 
+    if ( (ret = sha512_test()) != 0) 
         err_sys("SHA-512  test failed!\n", ret);
     else
         printf( "SHA-512  test passed!\n");
 #endif
 
 #ifdef CYASSL_RIPEMD
-    if ( (ret = ripemd_test()) ) 
+    if ( (ret = ripemd_test()) != 0) 
         err_sys("RIPEMD   test failed!\n", ret);
     else
         printf( "RIPEMD   test passed!\n");
 #endif
 
 #ifdef HAVE_BLAKE2 
-    if ( (ret = blake2b_test()) ) 
+    if ( (ret = blake2b_test()) != 0) 
         err_sys("BLAKE2b  test failed!\n", ret);
     else
         printf( "BLAKE2b  test passed!\n");
@@ -257,92 +285,113 @@ void ctaocrypt_test(void* args)
 
 #ifndef NO_HMAC
     #ifndef NO_MD5
-        if ( (ret = hmac_md5_test()) ) 
+        if ( (ret = hmac_md5_test()) != 0) 
             err_sys("HMAC-MD5 test failed!\n", ret);
         else
             printf( "HMAC-MD5 test passed!\n");
     #endif
 
     #ifndef NO_SHA
-    if ( (ret = hmac_sha_test()) ) 
+    if ( (ret = hmac_sha_test()) != 0) 
         err_sys("HMAC-SHA test failed!\n", ret);
     else
         printf( "HMAC-SHA test passed!\n");
     #endif
 
     #ifndef NO_SHA256
-        if ( (ret = hmac_sha256_test()) ) 
+        if ( (ret = hmac_sha256_test()) != 0) 
             err_sys("HMAC-SHA256 test failed!\n", ret);
         else
             printf( "HMAC-SHA256 test passed!\n");
     #endif
 
     #ifdef CYASSL_SHA384
-        if ( (ret = hmac_sha384_test()) ) 
+        if ( (ret = hmac_sha384_test()) != 0) 
             err_sys("HMAC-SHA384 test failed!\n", ret);
         else
             printf( "HMAC-SHA384 test passed!\n");
     #endif
 
     #ifdef CYASSL_SHA512
-        if ( (ret = hmac_sha512_test()) ) 
+        if ( (ret = hmac_sha512_test()) != 0) 
             err_sys("HMAC-SHA512 test failed!\n", ret);
         else
             printf( "HMAC-SHA512 test passed!\n");
     #endif
 
+    #ifdef HAVE_BLAKE2 
+        if ( (ret = hmac_blake2b_test()) != 0) 
+            err_sys("HMAC-BLAKE2 test failed!\n", ret);
+        else
+            printf( "HMAC-BLAKE2 test passed!\n");
+    #endif
+
+    #ifdef HAVE_HKDF
+        if ( (ret = hkdf_test()) != 0) 
+            err_sys("HMAC-KDF    test failed!\n", ret);
+        else
+            printf( "HMAC-KDF    test passed!\n");
+    #endif
+
+#endif
+
+#ifdef HAVE_AESGCM
+    if ( (ret = gmac_test()) != 0)
+        err_sys("GMAC     test passed!\n", ret);
+    else
+        printf( "GMAC     test passed!\n");
 #endif
 
 #ifndef NO_RC4
-    if ( (ret = arc4_test()) )
+    if ( (ret = arc4_test()) != 0)
         err_sys("ARC4     test failed!\n", ret);
     else
         printf( "ARC4     test passed!\n");
 #endif
 
 #ifndef NO_HC128
-    if ( (ret = hc128_test()) )
+    if ( (ret = hc128_test()) != 0)
         err_sys("HC-128   test failed!\n", ret);
     else
         printf( "HC-128   test passed!\n");
 #endif
 
 #ifndef NO_RABBIT
-    if ( (ret = rabbit_test()) )
+    if ( (ret = rabbit_test()) != 0)
         err_sys("Rabbit   test failed!\n", ret);
     else
         printf( "Rabbit   test passed!\n");
 #endif
 
 #ifndef NO_DES3
-    if ( (ret = des_test()) )
+    if ( (ret = des_test()) != 0)
         err_sys("DES      test failed!\n", ret);
     else
         printf( "DES      test passed!\n");
 #endif
 
 #ifndef NO_DES3
-    if ( (ret = des3_test()) )
+    if ( (ret = des3_test()) != 0)
         err_sys("DES3     test failed!\n", ret);
     else
         printf( "DES3     test passed!\n");
 #endif
 
 #ifndef NO_AES
-    if ( (ret = aes_test()) )
+    if ( (ret = aes_test()) != 0)
         err_sys("AES      test failed!\n", ret);
     else
         printf( "AES      test passed!\n");
 
 #ifdef HAVE_AESGCM
-    if ( (ret = aesgcm_test()) )
+    if ( (ret = aesgcm_test()) != 0)
         err_sys("AES-GCM  test failed!\n", ret);
     else
         printf( "AES-GCM  test passed!\n");
 #endif
 
 #ifdef HAVE_AESCCM
-    if ( (ret = aesccm_test()) )
+    if ( (ret = aesccm_test()) != 0)
         err_sys("AES-CCM  test failed!\n", ret);
     else
         printf( "AES-CCM  test passed!\n");
@@ -350,64 +399,82 @@ void ctaocrypt_test(void* args)
 #endif
 
 #ifdef HAVE_CAMELLIA
-    if ( (ret = camellia_test()) )
+    if ( (ret = camellia_test()) != 0)
         err_sys("CAMELLIA test failed!\n", ret);
     else
         printf( "CAMELLIA test passed!\n");
 #endif
 
-    if ( (ret = random_test()) )
+    if ( (ret = random_test()) != 0)
         err_sys("RANDOM   test failed!\n", ret);
     else
         printf( "RANDOM   test passed!\n");
 
 #ifndef NO_RSA
-    if ( (ret = rsa_test()) ) 
+    if ( (ret = rsa_test()) != 0) 
         err_sys("RSA      test failed!\n", ret);
     else
         printf( "RSA      test passed!\n");
 #endif
 
 #ifndef NO_DH
-    if ( (ret = dh_test()) ) 
+    if ( (ret = dh_test()) != 0) 
         err_sys("DH       test failed!\n", ret);
     else
         printf( "DH       test passed!\n");
 #endif
 
 #ifndef NO_DSA
-    if ( (ret = dsa_test()) ) 
+    if ( (ret = dsa_test()) != 0) 
         err_sys("DSA      test failed!\n", ret);
     else
         printf( "DSA      test passed!\n");
 #endif
     
 #ifndef NO_PWDBASED
-    if ( (ret = pwdbased_test()) ) 
+    if ( (ret = pwdbased_test()) != 0) 
         err_sys("PWDBASED test failed!\n", ret);
     else
         printf( "PWDBASED test passed!\n");
 #endif
     
 #ifdef OPENSSL_EXTRA
-    if ( (ret = openssl_test()) ) 
+    if ( (ret = openssl_test()) != 0) 
         err_sys("OPENSSL  test failed!\n", ret);
     else
         printf( "OPENSSL  test passed!\n");
 #endif
 
 #ifdef HAVE_ECC
-    if ( (ret = ecc_test()) ) 
+    if ( (ret = ecc_test()) != 0) 
         err_sys("ECC      test failed!\n", ret);
     else
         printf( "ECC      test passed!\n");
+    #ifdef HAVE_ECC_ENCRYPT
+        if ( (ret = ecc_encrypt_test()) != 0) 
+            err_sys("ECC Enc  test failed!\n", ret);
+        else
+            printf( "ECC Enc  test passed!\n");
+    #endif
 #endif
 
 #ifdef HAVE_LIBZ
-    if ( (ret = compress_test()) ) 
+    if ( (ret = compress_test()) != 0) 
         err_sys("COMPRESS test failed!\n", ret);
     else
         printf( "COMPRESS test passed!\n");
+#endif
+
+#ifdef HAVE_PKCS7
+    if ( (ret = pkcs7enveloped_test()) != 0)
+        err_sys("PKCS7enveloped test failed!\n", ret);
+    else
+        printf( "PKCS7enveloped test passed!\n");
+
+    if ( (ret = pkcs7signed_test()) != 0)
+        err_sys("PKCS7signed    test failed!\n", ret);
+    else
+        printf( "PKCS7signed    test passed!\n");
 #endif
 
     ((func_args*)args)->return_code = ret;
@@ -443,8 +510,10 @@ static int OpenNitroxDevice(int dma_mode,int dev_id)
 
     int main(int argc, char** argv)
     {
+
         func_args args;
 
+			
 #ifdef HAVE_CAVIUM
         int ret = OpenNitroxDevice(CAVIUM_DIRECT, CAVIUM_DEV_ID);
         if (ret != 0)
@@ -459,6 +528,7 @@ static int OpenNitroxDevice(int dma_mode,int dev_id)
 #ifdef HAVE_CAVIUM
         CspShutdown(CAVIUM_DEV_ID);
 #endif
+				
         return args.return_code;
     }
 
@@ -1203,6 +1273,78 @@ int hmac_sha256_test(void)
 #endif
 
 
+#if !defined(NO_HMAC) && defined(HAVE_BLAKE2)
+int hmac_blake2b_test(void)
+{
+    Hmac hmac;
+    byte hash[BLAKE2B_256];
+
+    const char* keys[]=
+    {
+        "\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b"
+                                                                "\x0b\x0b\x0b",
+        "Jefe",
+        "\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA"
+                                                                "\xAA\xAA\xAA"
+    };
+
+    testVector a, b, c;
+    testVector test_hmac[3];
+
+    int times = sizeof(test_hmac) / sizeof(testVector), i;
+
+    a.input  = "Hi There";
+    a.output = "\x72\x93\x0d\xdd\xf5\xf7\xe1\x78\x38\x07\x44\x18\x0b\x3f\x51"
+               "\x37\x25\xb5\x82\xc2\x08\x83\x2f\x1c\x99\xfd\x03\xa0\x16\x75"
+               "\xac\xfd";
+    a.inLen  = strlen(a.input);
+    a.outLen = BLAKE2B_256;
+
+    b.input  = "what do ya want for nothing?";
+    b.output = "\x3d\x20\x50\x71\x05\xc0\x8c\x0c\x38\x44\x1e\xf7\xf9\xd1\x67"
+               "\x21\xff\x64\xf5\x94\x00\xcf\xf9\x75\x41\xda\x88\x61\x9d\x7c"
+               "\xda\x2b";
+    b.inLen  = strlen(b.input);
+    b.outLen = BLAKE2B_256;
+
+    c.input  = "\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD"
+               "\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD"
+               "\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD\xDD"
+               "\xDD\xDD\xDD\xDD\xDD\xDD";
+    c.output = "\xda\xfe\x2a\x24\xfc\xe7\xea\x36\x34\xbe\x41\x92\xc7\x11\xa7"
+               "\x00\xae\x53\x9c\x11\x9c\x80\x74\x55\x22\x25\x4a\xb9\x55\xd3"
+               "\x0f\x87";
+    c.inLen  = strlen(c.input);
+    c.outLen = BLAKE2B_256;
+
+    test_hmac[0] = a;
+    test_hmac[1] = b;
+    test_hmac[2] = c;
+
+    for (i = 0; i < times; ++i) {
+#ifdef HAVE_CAVIUM
+        if (i == 1)
+            continue; /* driver can't handle keys <= bytes */
+        if (HmacInitCavium(&hmac, CAVIUM_DEV_ID) != 0)
+            return -20011; 
+#endif
+        HmacSetKey(&hmac, BLAKE2B_ID, (byte*)keys[i], (word32)strlen(keys[i]));
+        HmacUpdate(&hmac, (byte*)test_hmac[i].input,
+                   (word32)test_hmac[i].inLen);
+        HmacFinal(&hmac, hash);
+
+        if (memcmp(hash, test_hmac[i].output, BLAKE2B_256) != 0)
+            return -20 - i;
+#ifdef HAVE_CAVIUM
+        HmacFreeCavium(&hmac);
+#endif
+    }
+
+    return 0;
+}
+#endif
+
+
 #if !defined(NO_HMAC) && defined(CYASSL_SHA384)
 int hmac_sha384_test(void)
 {
@@ -1537,7 +1679,7 @@ int rabbit_test(void)
     b.outLen = 8;
 
     c.input  = "\x00\x00\x00\x00\x00\x00\x00\x00";
-    c.output = "\x9C\x51\xE2\x87\x84\xC3\x7F\xE9";
+    c.output = "\x04\xCE\xCA\x7A\x1A\x86\x6E\x77";
     c.inLen  = 8;
     c.outLen = 8;
 
@@ -1774,6 +1916,12 @@ int aes_test(void)
             0x79,0x21,0x70,0xa0,0xf3,0x00,0x9c,0xee
         };
 
+        const byte oddCipher[] =
+        {
+            0xb9,0xd7,0xcb,0x08,0xb0,0xe1,0x7b,0xa0,
+            0xc2
+        };
+
         AesSetKeyDirect(&enc, ctrKey, AES_BLOCK_SIZE, ctrIv, AES_ENCRYPTION);
         /* Ctr only uses encrypt, even on key setup */
         AesSetKeyDirect(&dec, ctrKey, AES_BLOCK_SIZE, ctrIv, AES_ENCRYPTION);
@@ -1786,8 +1934,68 @@ int aes_test(void)
 
         if (memcmp(cipher, ctrCipher, AES_BLOCK_SIZE*4))
             return -67;
+
+        /* let's try with just 9 bytes, non block size test */
+        AesSetKeyDirect(&enc, ctrKey, AES_BLOCK_SIZE, ctrIv, AES_ENCRYPTION);
+        /* Ctr only uses encrypt, even on key setup */
+        AesSetKeyDirect(&dec, ctrKey, AES_BLOCK_SIZE, ctrIv, AES_ENCRYPTION);
+
+        AesCtrEncrypt(&enc, cipher, ctrPlain, 9);
+        AesCtrEncrypt(&dec, plain, cipher, 9);
+
+        if (memcmp(plain, ctrPlain, 9))
+            return -68;
+
+        if (memcmp(cipher, ctrCipher, 9))
+            return -69;
+
+        /* and an additional 9 bytes to reuse tmp left buffer */
+        AesCtrEncrypt(&enc, cipher, ctrPlain, 9);
+        AesCtrEncrypt(&dec, plain, cipher, 9);
+
+        if (memcmp(plain, ctrPlain, 9))
+            return -70;
+
+        if (memcmp(cipher, oddCipher, 9))
+            return -71;
     }
 #endif /* CYASSL_AES_COUNTER */
+
+#if defined(CYASSL_AESNI) && defined(CYASSL_AES_DIRECT)
+    {
+        const byte niPlain[] =
+        {
+            0x6b,0xc1,0xbe,0xe2,0x2e,0x40,0x9f,0x96,
+            0xe9,0x3d,0x7e,0x11,0x73,0x93,0x17,0x2a
+        };
+
+        const byte niCipher[] =
+        {
+            0xf3,0xee,0xd1,0xbd,0xb5,0xd2,0xa0,0x3c,
+            0x06,0x4b,0x5a,0x7e,0x3d,0xb1,0x81,0xf8 
+        };
+
+        const byte niKey[] =
+        {
+            0x60,0x3d,0xeb,0x10,0x15,0xca,0x71,0xbe,
+            0x2b,0x73,0xae,0xf0,0x85,0x7d,0x77,0x81,
+            0x1f,0x35,0x2c,0x07,0x3b,0x61,0x08,0xd7,
+            0x2d,0x98,0x10,0xa3,0x09,0x14,0xdf,0xf4 
+        };
+
+        XMEMSET(cipher, 0, AES_BLOCK_SIZE);
+        AesSetKey(&enc, niKey, sizeof(niKey), cipher, AES_ENCRYPTION);
+        AesEncryptDirect(&enc, cipher, niPlain);
+        if (XMEMCMP(cipher, niCipher, AES_BLOCK_SIZE) != 0)
+            return -20006;
+
+        XMEMSET(plain, 0, AES_BLOCK_SIZE);
+        AesSetKey(&dec, niKey, sizeof(niKey), plain, AES_DECRYPTION);
+        AesDecryptDirect(&dec, plain, niCipher);
+        if (XMEMCMP(plain, niPlain, AES_BLOCK_SIZE) != 0)
+            return -20007;
+    }
+#endif /* CYASSL_AESNI && CYASSL_AES_DIRECT */
 
     return 0;
 }
@@ -1878,6 +2086,95 @@ int aesgcm_test(void)
         return -70;
     if (memcmp(p, p2, sizeof(p2)))
         return -71;
+
+    return 0;
+}
+
+int gmac_test(void)
+{
+    Gmac gmac;
+
+    const byte k1[] =
+    {
+        0x89, 0xc9, 0x49, 0xe9, 0xc8, 0x04, 0xaf, 0x01,
+        0x4d, 0x56, 0x04, 0xb3, 0x94, 0x59, 0xf2, 0xc8
+    };
+    const byte iv1[] =
+    {
+        0xd1, 0xb1, 0x04, 0xc8, 0x15, 0xbf, 0x1e, 0x94,
+        0xe2, 0x8c, 0x8f, 0x16
+    };
+    const byte a1[] =
+    {
+       0x82, 0xad, 0xcd, 0x63, 0x8d, 0x3f, 0xa9, 0xd9,
+       0xf3, 0xe8, 0x41, 0x00, 0xd6, 0x1e, 0x07, 0x77
+    };
+    const byte t1[] =
+    {
+        0x88, 0xdb, 0x9d, 0x62, 0x17, 0x2e, 0xd0, 0x43,
+        0xaa, 0x10, 0xf1, 0x6d, 0x22, 0x7d, 0xc4, 0x1b
+    };
+
+    const byte k2[] =
+    {
+        0x40, 0xf7, 0xec, 0xb2, 0x52, 0x6d, 0xaa, 0xd4,
+        0x74, 0x25, 0x1d, 0xf4, 0x88, 0x9e, 0xf6, 0x5b
+    };
+    const byte iv2[] =
+    {
+        0xee, 0x9c, 0x6e, 0x06, 0x15, 0x45, 0x45, 0x03,
+        0x1a, 0x60, 0x24, 0xa7
+    };
+    const byte a2[] =
+    {
+        0x94, 0x81, 0x2c, 0x87, 0x07, 0x4e, 0x15, 0x18,
+        0x34, 0xb8, 0x35, 0xaf, 0x1c, 0xa5, 0x7e, 0x56
+    };
+    const byte t2[] =
+    {
+        0xc6, 0x81, 0x79, 0x8e, 0x3d, 0xda, 0xb0, 0x9f,
+        0x8d, 0x83, 0xb0, 0xbb, 0x14, 0xb6, 0x91
+    };
+
+    const byte k3[] =
+    {
+        0xb8, 0xe4, 0x9a, 0x5e, 0x37, 0xf9, 0x98, 0x2b,
+        0xb9, 0x6d, 0xd0, 0xc9, 0xb6, 0xab, 0x26, 0xac
+    };
+    const byte iv3[] =
+    {
+        0xe4, 0x4a, 0x42, 0x18, 0x8c, 0xae, 0x94, 0x92,
+        0x6a, 0x9c, 0x26, 0xb0
+    };
+    const byte a3[] =
+    {
+        0x9d, 0xb9, 0x61, 0x68, 0xa6, 0x76, 0x7a, 0x31,
+        0xf8, 0x29, 0xe4, 0x72, 0x61, 0x68, 0x3f, 0x8a
+    };
+    const byte t3[] =
+    {
+        0x23, 0xe2, 0x9f, 0x66, 0xe4, 0xc6, 0x52, 0x48
+    };
+
+    byte tag[16];
+
+    memset(tag, 0, sizeof(tag));
+    GmacSetKey(&gmac, k1, sizeof(k1));
+    GmacUpdate(&gmac, iv1, sizeof(iv1), a1, sizeof(a1), tag, sizeof(t1));
+    if (memcmp(t1, tag, sizeof(t1)) != 0)
+        return -126;
+
+    memset(tag, 0, sizeof(tag));
+    GmacSetKey(&gmac, k2, sizeof(k2));
+    GmacUpdate(&gmac, iv2, sizeof(iv2), a2, sizeof(a2), tag, sizeof(t2));
+    if (memcmp(t2, tag, sizeof(t2)) != 0)
+        return -127;
+
+    memset(tag, 0, sizeof(tag));
+    GmacSetKey(&gmac, k3, sizeof(k3));
+    GmacUpdate(&gmac, iv3, sizeof(iv3), a3, sizeof(a3), tag, sizeof(t3));
+    if (memcmp(t3, tag, sizeof(t3)) != 0)
+        return -128;
 
     return 0;
 }
@@ -1993,102 +2290,102 @@ typedef struct {
 int camellia_test(void)
 {
     /* Camellia ECB Test Plaintext */
-    const byte pte[] = 
+    static const byte pte[] = 
     {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
         0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10
     };
 
     /* Camellia ECB Test Initialization Vector */
-    const byte ive[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    static const byte ive[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
 
     /* Test 1: Camellia ECB 128-bit key */
-    const byte k1[] =
+    static const byte k1[] =
     {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
         0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10
     };
-    const byte c1[] =
+    static const byte c1[] =
     {
         0x67, 0x67, 0x31, 0x38, 0x54, 0x96, 0x69, 0x73,
         0x08, 0x57, 0x06, 0x56, 0x48, 0xea, 0xbe, 0x43
     };
 
     /* Test 2: Camellia ECB 192-bit key */
-    const byte k2[] =
+    static const byte k2[] =
     {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
         0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77
     };
-    const byte c2[] =
+    static const byte c2[] =
     {
         0xb4, 0x99, 0x34, 0x01, 0xb3, 0xe9, 0x96, 0xf8,
         0x4e, 0xe5, 0xce, 0xe7, 0xd7, 0x9b, 0x09, 0xb9
     };
 
     /* Test 3: Camellia ECB 256-bit key */
-    const byte k3[] =
+    static const byte k3[] =
     {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
         0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
         0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff
     };
-    const byte c3[] =
+    static const byte c3[] =
     {
         0x9a, 0xcc, 0x23, 0x7d, 0xff, 0x16, 0xd7, 0x6c,
         0x20, 0xef, 0x7c, 0x91, 0x9e, 0x3a, 0x75, 0x09
     };
 
     /* Camellia CBC Test Plaintext */
-    const byte ptc[] =
+    static const byte ptc[] =
     {
         0x6B, 0xC1, 0xBE, 0xE2, 0x2E, 0x40, 0x9F, 0x96,
         0xE9, 0x3D, 0x7E, 0x11, 0x73, 0x93, 0x17, 0x2A 
     };
 
     /* Camellia CBC Test Initialization Vector */
-    const byte ivc[] =
+    static const byte ivc[] =
     {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F 
     };
 
     /* Test 4: Camellia-CBC 128-bit key */
-    const byte k4[] =
+    static const byte k4[] =
     {
         0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6,
         0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C 
     };
-    const byte c4[] =
+    static const byte c4[] =
     {
         0x16, 0x07, 0xCF, 0x49, 0x4B, 0x36, 0xBB, 0xF0,
         0x0D, 0xAE, 0xB0, 0xB5, 0x03, 0xC8, 0x31, 0xAB 
     };
 
     /* Test 5: Camellia-CBC 192-bit key */
-    const byte k5[] =
+    static const byte k5[] =
     {
         0x8E, 0x73, 0xB0, 0xF7, 0xDA, 0x0E, 0x64, 0x52,
         0xC8, 0x10, 0xF3, 0x2B, 0x80, 0x90, 0x79, 0xE5,
         0x62, 0xF8, 0xEA, 0xD2, 0x52, 0x2C, 0x6B, 0x7B 
     };
-    const byte c5[] =
+    static const byte c5[] =
     {
         0x2A, 0x48, 0x30, 0xAB, 0x5A, 0xC4, 0xA1, 0xA2,
         0x40, 0x59, 0x55, 0xFD, 0x21, 0x95, 0xCF, 0x93 
     };
 
     /* Test 6: CBC 256-bit key */
-    const byte k6[] =
+    static const byte k6[] =
     {
         0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
         0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81,
         0x1F, 0x35, 0x2C, 0x07, 0x3B, 0x61, 0x08, 0xD7,
         0x2D, 0x98, 0x10, 0xA3, 0x09, 0x14, 0xDF, 0xF4 
     };
-    const byte c6[] =
+    static const byte c6[] =
     {
         0xE6, 0xCF, 0xA3, 0x5F, 0xC0, 0x2B, 0x13, 0x4A,
         0x4D, 0x2C, 0x0B, 0x67, 0x37, 0xAC, 0x3E, 0xDA 
@@ -2155,9 +2452,9 @@ int camellia_test(void)
     if (XMEMCMP(cam.reg, ivc, CAMELLIA_BLOCK_SIZE))
         return -1;
 
-    /* Setting the IV to NULL should leave the IV unchanged */
+    /* Setting the IV to NULL should be same as all zeros IV */
     if (CamelliaSetIV(&cam, NULL) != 0 ||
-                                    XMEMCMP(cam.reg, ivc, CAMELLIA_BLOCK_SIZE))
+                                    XMEMCMP(cam.reg, ive, CAMELLIA_BLOCK_SIZE))
         return -1;
     
     /* First parameter should never be null */
@@ -2232,21 +2529,50 @@ byte GetEntropy(ENTROPY_CMD cmd, byte* out)
 
 #ifndef NO_RSA
 
-#ifdef FREESCALE_MQX
-    static const char* clientKey  = "a:\certs\\client-key.der";
-    static const char* clientCert = "a:\certs\\client-cert.der";
-    #ifdef CYASSL_CERT_GEN
-        static const char* caKeyFile  = "a:\certs\\ca-key.der";
-        static const char* caCertFile = "a:\certs\\ca-cert.pem";
-    #endif
-#elif !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
-    static const char* clientKey  = "./certs/client-key.der";
-    static const char* clientCert = "./certs/client-cert.der";
-    #ifdef CYASSL_CERT_GEN
-        static const char* caKeyFile  = "./certs/ca-key.der";
-        static const char* caCertFile = "./certs/ca-cert.pem";
+#if !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
+    #ifdef FREESCALE_MQX
+        static const char* clientKey  = "a:\\certs\\client-key.der";
+        static const char* clientCert = "a:\\certs\\client-cert.der";
+        #ifdef CYASSL_CERT_GEN
+            static const char* caKeyFile  = "a:\\certs\\ca-key.der";
+            static const char* caCertFile = "a:\\certs\\ca-cert.pem";
+            #ifdef HAVE_ECC
+                static const char* eccCaKeyFile  = "a:\\certs\\ecc-key.der";
+                static const char* eccCaCertFile = "a:\\certs\\server-ecc.pem";
+            #endif 
+        #endif
+    #elif defined(CYASSL_MKD_SHELL)
+        static char* clientKey = "certs/client-key.der";
+        static char* clientCert = "certs/client-cert.der";
+        void set_clientKey(char *key) {  clientKey = key ; }
+        void set_clientCert(char *cert) {  clientCert = cert ; }
+        #ifdef CYASSL_CERT_GEN
+            static char* caKeyFile  = "certs/ca-key.der";
+            static char* caCertFile = "certs/ca-cert.pem";
+            void set_caKeyFile (char * key)  { caKeyFile   = key ; }
+            void set_caCertFile(char * cert) { caCertFile = cert ; }
+            #ifdef HAVE_ECC
+                static const char* eccCaKeyFile  = "certs/ecc-key.der";
+                static const char* eccCaCertFile = "certs/server-ecc.pem";
+                void set_eccCaKeyFile (char * key)  { eccCaKeyFile  = key ; }
+                void set_eccCaCertFile(char * cert) { eccCaCertFile = cert ; }
+            #endif 
+        #endif
+    #else
+        static const char* clientKey  = "./certs/client-key.der";
+        static const char* clientCert = "./certs/client-cert.der";
+        #ifdef CYASSL_CERT_GEN
+            static const char* caKeyFile  = "./certs/ca-key.der";
+            static const char* caCertFile = "./certs/ca-cert.pem";
+            #ifdef HAVE_ECC
+                static const char* eccCaKeyFile  = "./certs/ecc-key.der";
+                static const char* eccCaCertFile = "./certs/server-ecc.pem";
+            #endif 
+        #endif
     #endif
 #endif
+
+
 
 #define FOURK_BUF 4096
 
@@ -2274,11 +2600,11 @@ int rsa_test(void)
         return -40;
 
 #ifdef USE_CERT_BUFFERS_1024
-    XMEMCPY(tmp, client_key_der_1024, sizeof(client_key_der_1024));
-    bytes = sizeof(client_key_der_1024);
+    XMEMCPY(tmp, client_key_der_1024, sizeof_client_key_der_1024);
+    bytes = sizeof_client_key_der_1024;
 #elif defined(USE_CERT_BUFFERS_2048)
-    XMEMCPY(tmp, client_key_der_2048, sizeof(client_key_der_2048));
-    bytes = sizeof(client_key_der_2048);
+    XMEMCPY(tmp, client_key_der_2048, sizeof_client_key_der_2048);
+    bytes = sizeof_client_key_der_2048;
 #else
     file = fopen(clientKey, "rb");
 
@@ -2317,12 +2643,16 @@ int rsa_test(void)
 
     if (memcmp(plain, in, ret)) return -48;
 
+#if defined(CYASSL_MDK_ARM)
+    #define sizeof(s) strlen((char *)(s))
+#endif
+
 #ifdef USE_CERT_BUFFERS_1024
-    XMEMCPY(tmp, client_cert_der_1024, sizeof(client_cert_der_1024));
-    bytes = sizeof(client_cert_der_1024);
+    XMEMCPY(tmp, client_cert_der_1024, sizeof_client_cert_der_1024);
+    bytes = sizeof_client_cert_der_1024;
 #elif defined(USE_CERT_BUFFERS_2048)
-    XMEMCPY(tmp, client_cert_der_2048, sizeof(client_cert_der_2048));
-    bytes = sizeof(client_cert_der_2048);
+    XMEMCPY(tmp, client_cert_der_2048, sizeof_client_cert_der_2048);
+    bytes = sizeof_client_cert_der_2048;
 #else
     file2 = fopen(clientCert, "rb");
     if (!file2)
@@ -2331,6 +2661,10 @@ int rsa_test(void)
     bytes = fread(tmp, 1, FOURK_BUF, file2);
     fclose(file2);
 #endif
+
+#ifdef sizeof
+		#undef sizeof
+#endif		
 
 #ifdef CYASSL_TEST_CERT
     InitDecodedCert(&cert, tmp, (word32)bytes, 0);
@@ -2475,6 +2809,7 @@ int rsa_test(void)
         int         pemSz;
         size_t      bytes3;
         word32      idx3 = 0;
+			  FILE* file3 ;
 #ifdef CYASSL_TEST_CERT
         DecodedCert decode;
 #endif
@@ -2486,7 +2821,7 @@ int rsa_test(void)
         if (pem == NULL)
             return -312;
 
-        FILE* file3 = fopen(caKeyFile, "rb");
+        file3 = fopen(caKeyFile, "rb");
 
         if (!file3)
             return -412;
@@ -2512,11 +2847,12 @@ int rsa_test(void)
         if (ret < 0)
             return -405;
 
-        certSz = MakeCert(&myCert, derCert, FOURK_BUF, &key, &rng); 
+        certSz = MakeCert(&myCert, derCert, FOURK_BUF, &key, NULL, &rng); 
         if (certSz < 0)
             return -407;
 
-        certSz = SignCert(&myCert, derCert, FOURK_BUF, &caKey, &rng);
+        certSz = SignCert(myCert.bodySz, myCert.sigType, derCert, FOURK_BUF,
+                          &caKey, NULL, &rng);
         if (certSz < 0)
             return -408;
 
@@ -2548,6 +2884,95 @@ int rsa_test(void)
         free(derCert);
         FreeRsaKey(&caKey);
     }
+#ifdef HAVE_ECC
+    /* ECC CA style */
+    {
+        ecc_key     caKey;
+        Cert        myCert;
+        byte*       derCert;
+        byte*       pem;
+        FILE*       derFile;
+        FILE*       pemFile;
+        int         certSz;
+        int         pemSz;
+        size_t      bytes3;
+        word32      idx3 = 0;
+			  FILE* file3 ;
+#ifdef CYASSL_TEST_CERT
+        DecodedCert decode;
+#endif
+
+        derCert = (byte*)malloc(FOURK_BUF);
+        if (derCert == NULL)
+            return -5311;
+        pem = (byte*)malloc(FOURK_BUF);
+        if (pem == NULL)
+            return -5312;
+
+        file3 = fopen(eccCaKeyFile, "rb");
+
+        if (!file3)
+            return -5412;
+
+        bytes3 = fread(tmp, 1, FOURK_BUF, file3);
+        fclose(file3);
+  
+        ecc_init(&caKey);  
+        ret = EccPrivateKeyDecode(tmp, &idx3, &caKey, (word32)bytes3);
+        if (ret != 0) return -5413;
+
+        InitCert(&myCert);
+        myCert.sigType = CTC_SHA256wECDSA; 
+
+        strncpy(myCert.subject.country, "US", CTC_NAME_SIZE);
+        strncpy(myCert.subject.state, "OR", CTC_NAME_SIZE);
+        strncpy(myCert.subject.locality, "Portland", CTC_NAME_SIZE);
+        strncpy(myCert.subject.org, "wolfSSL", CTC_NAME_SIZE);
+        strncpy(myCert.subject.unit, "Development", CTC_NAME_SIZE);
+        strncpy(myCert.subject.commonName, "www.wolfssl.com", CTC_NAME_SIZE);
+        strncpy(myCert.subject.email, "info@wolfssl.com", CTC_NAME_SIZE);
+
+        ret = SetIssuer(&myCert, eccCaCertFile);
+        if (ret < 0)
+            return -5405;
+
+        certSz = MakeCert(&myCert, derCert, FOURK_BUF, NULL, &caKey, &rng); 
+        if (certSz < 0)
+            return -5407;
+
+        certSz = SignCert(myCert.bodySz, myCert.sigType, derCert, FOURK_BUF,
+                          NULL, &caKey, &rng);
+        if (certSz < 0)
+            return -5408;
+
+#ifdef CYASSL_TEST_CERT
+        InitDecodedCert(&decode, derCert, certSz, 0);
+        ret = ParseCert(&decode, CERT_TYPE, NO_VERIFY, 0);
+        if (ret != 0)
+            return -5409;
+        FreeDecodedCert(&decode);
+#endif
+
+        derFile = fopen("./certecc.der", "wb");
+        if (!derFile)
+            return -5410;
+        ret = (int)fwrite(derCert, certSz, 1, derFile);
+        fclose(derFile);
+
+        pemSz = DerToPem(derCert, certSz, pem, FOURK_BUF, CERT_TYPE);
+        if (pemSz < 0)
+            return -5411;
+
+        pemFile = fopen("./certecc.pem", "wb");
+        if (!pemFile)
+            return -5412;
+        ret = (int)fwrite(pem, pemSz, 1, pemFile);
+        fclose(pemFile);
+        free(pem);
+        free(derCert);
+        ecc_free(&caKey);
+    }
+#endif /* HAVE_ECC */
 #ifdef HAVE_NTRU
     {
         RsaKey      caKey;
@@ -2628,7 +3053,8 @@ int rsa_test(void)
         if (certSz < 0)
             return -456;
 
-        certSz = SignCert(&myCert, derCert, FOURK_BUF, &caKey, &rng);
+        certSz = SignCert(myCert.bodySz, myCert.sigType, derCert, FOURK_BUF,
+                          &caKey, NULL, &rng);
         if (certSz < 0)
             return -457;
 
@@ -2666,6 +3092,66 @@ int rsa_test(void)
         FreeRsaKey(&caKey);
     }
 #endif /* HAVE_NTRU */
+#ifdef CYASSL_CERT_REQ
+    {
+        Cert        req;
+        byte*       der;
+        byte*       pem;
+        int         derSz;
+        int         pemSz;
+        FILE*       reqFile;
+
+        der = (byte*)malloc(FOURK_BUF);
+        if (der == NULL)
+            return -463;
+        pem = (byte*)malloc(FOURK_BUF);
+        if (pem == NULL)
+            return -464;
+
+        InitCert(&req);
+
+        req.version = 0;
+        req.isCA    = 1;
+        strncpy(req.challengePw, "yassl123", CTC_NAME_SIZE);
+        strncpy(req.subject.country, "US", CTC_NAME_SIZE);
+        strncpy(req.subject.state, "OR", CTC_NAME_SIZE);
+        strncpy(req.subject.locality, "Portland", CTC_NAME_SIZE);
+        strncpy(req.subject.org, "yaSSL", CTC_NAME_SIZE);
+        strncpy(req.subject.unit, "Development", CTC_NAME_SIZE);
+        strncpy(req.subject.commonName, "www.yassl.com", CTC_NAME_SIZE);
+        strncpy(req.subject.email, "info@yassl.com", CTC_NAME_SIZE);
+        req.sigType = CTC_SHA256wRSA;
+
+        derSz = MakeCertReq(&req, der, FOURK_BUF, &key, NULL);
+        if (derSz < 0)
+            return -465;
+
+        derSz = SignCert(req.bodySz, req.sigType, der, FOURK_BUF,
+                          &key, NULL, &rng);
+        if (derSz < 0)
+            return -466;
+
+        pemSz = DerToPem(der, derSz, pem, FOURK_BUF, CERTREQ_TYPE);
+        if (pemSz < 0)
+            return -467;
+
+        reqFile = fopen("./certreq.der", "wb");
+        if (!reqFile)
+            return -468;
+
+        ret = (int)fwrite(der, derSz, 1, reqFile);
+        fclose(reqFile);
+
+        reqFile = fopen("./certreq.pem", "wb");
+        if (!reqFile)
+            return -469;
+        ret = (int)fwrite(pem, pemSz, 1, reqFile);
+        fclose(reqFile);
+
+        free(pem);
+        free(der);
+    }
+#endif /* CYASSL_CERT_REQ */
 #endif /* CYASSL_CERT_GEN */
 
     FreeRsaKey(&key);
@@ -2682,10 +3168,12 @@ int rsa_test(void)
 
 #ifndef NO_DH
 
-#ifdef FREESCALE_MQX
-    static const char* dhKey = "a:\certs\\dh2048.der";
-#elif !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
-    static const char* dhKey = "./certs/dh2048.der";
+#if !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
+    #ifdef FREESCALE_MQX
+        static const char* dhKey = "a:\certs\\dh2048.der";
+    #else
+        static const char* dhKey = "./certs/dh2048.der";
+    #endif
 #endif
 
 int dh_test(void)
@@ -2703,12 +3191,14 @@ int dh_test(void)
     DhKey  key;
     DhKey  key2;
     RNG    rng;
+	
+		
 #ifdef USE_CERT_BUFFERS_1024
-    XMEMCPY(tmp, dh_key_der_1024, sizeof(dh_key_der_1024));
-    bytes = sizeof(dh_key_der_1024);
+    XMEMCPY(tmp, dh_key_der_1024, sizeof_dh_key_der_1024);
+    bytes = sizeof_dh_key_der_1024;
 #elif defined(USE_CERT_BUFFERS_2048)
-    XMEMCPY(tmp, dh_key_der_2048, sizeof(dh_key_der_2048));
-    bytes = sizeof(dh_key_der_2048);
+    XMEMCPY(tmp, dh_key_der_2048, sizeof_dh_key_der_2048);
+    bytes = sizeof_dh_key_der_2048;
 #else
     FILE*  file = fopen(dhKey, "rb");
 
@@ -2758,10 +3248,12 @@ int dh_test(void)
 
 #ifndef NO_DSA
 
-#ifdef FREESCALE_MQX
-    static const char* dsaKey = "a:\certs\\dsa2048.der";
-#elif !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
-    static const char* dsaKey = "./certs/dsa2048.der";
+#if !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
+    #ifdef FREESCALE_MQX
+        static const char* dsaKey = "a:\\certs\\dsa2048.der";
+    #else
+        static const char* dsaKey = "./certs/dsa2048.der";
+    #endif
 #endif
 
 int dsa_test(void)
@@ -2775,12 +3267,14 @@ int dsa_test(void)
     Sha    sha;
     byte   hash[SHA_DIGEST_SIZE];
     byte   signature[40];
+
+		
 #ifdef USE_CERT_BUFFERS_1024
-    XMEMCPY(tmp, dsa_key_der_1024, sizeof(dsa_key_der_1024));
-    bytes = sizeof(dsa_key_der_1024);
+    XMEMCPY(tmp, dsa_key_der_1024, sizeof_dsa_key_der_1024);
+    bytes = sizeof_dsa_key_der_1024;
 #elif defined(USE_CERT_BUFFERS_2048)
-    XMEMCPY(tmp, dsa_key_der_2048, sizeof(dsa_key_der_2048));
-    bytes = sizeof(dsa_key_der_2048);
+    XMEMCPY(tmp, dsa_key_der_2048, sizeof_dsa_key_der_2048);
+    bytes = sizeof_dsa_key_der_2048;
 #else
     FILE*  file = fopen(dsaKey, "rb");
 
@@ -3146,6 +3640,87 @@ int pwdbased_test(void)
 
 #endif /* NO_PWDBASED */
 
+#if defined(HAVE_HKDF) && (!defined(NO_SHA) || !defined(NO_SHA256))
+
+int hkdf_test(void)
+{
+    int ret;
+    int L = 42;
+    byte okm1[42];
+    byte ikm1[22] = { 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+                      0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+                      0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b };
+    byte salt1[13] ={ 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                      0x08, 0x09, 0x0a, 0x0b, 0x0c };
+    byte info1[10] ={ 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
+                      0xf8, 0xf9 };
+    byte res1[42] = { 0x0a, 0xc1, 0xaf, 0x70, 0x02, 0xb3, 0xd7, 0x61,
+                      0xd1, 0xe5, 0x52, 0x98, 0xda, 0x9d, 0x05, 0x06,
+                      0xb9, 0xae, 0x52, 0x05, 0x72, 0x20, 0xa3, 0x06,
+                      0xe0, 0x7b, 0x6b, 0x87, 0xe8, 0xdf, 0x21, 0xd0,
+                      0xea, 0x00, 0x03, 0x3d, 0xe0, 0x39, 0x84, 0xd3,
+                      0x49, 0x18 };
+    byte res2[42] = { 0x08, 0x5a, 0x01, 0xea, 0x1b, 0x10, 0xf3, 0x69,
+                      0x33, 0x06, 0x8b, 0x56, 0xef, 0xa5, 0xad, 0x81,
+                      0xa4, 0xf1, 0x4b, 0x82, 0x2f, 0x5b, 0x09, 0x15,
+                      0x68, 0xa9, 0xcd, 0xd4, 0xf1, 0x55, 0xfd, 0xa2,
+                      0xc2, 0x2e, 0x42, 0x24, 0x78, 0xd3, 0x05, 0xf3,
+                      0xf8, 0x96 };
+    byte res3[42] = { 0x8d, 0xa4, 0xe7, 0x75, 0xa5, 0x63, 0xc1, 0x8f,
+                      0x71, 0x5f, 0x80, 0x2a, 0x06, 0x3c, 0x5a, 0x31,
+                      0xb8, 0xa1, 0x1f, 0x5c, 0x5e, 0xe1, 0x87, 0x9e,
+                      0xc3, 0x45, 0x4e, 0x5f, 0x3c, 0x73, 0x8d, 0x2d,
+                      0x9d, 0x20, 0x13, 0x95, 0xfa, 0xa4, 0xb6, 0x1a,
+                      0x96, 0xc8 };
+    byte res4[42] = { 0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a,
+                      0x90, 0x43, 0x4f, 0x64, 0xd0, 0x36, 0x2f, 0x2a,
+                      0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c,
+                      0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4, 0xc5, 0xbf,
+                      0x34, 0x00, 0x72, 0x08, 0xd5, 0xb8, 0x87, 0x18,
+                      0x58, 0x65 };
+
+    (void)res1;
+    (void)res2;
+    (void)res3;
+    (void)res4;
+
+#ifndef NO_SHA
+    ret = HKDF(SHA, ikm1, 22, NULL, 0, NULL, 0, okm1, L);
+    if (ret != 0)
+        return -2001;
+
+    if (memcmp(okm1, res1, L) != 0)
+        return -2002;
+   
+    ret = HKDF(SHA, ikm1, 11, salt1, 13, info1, 10, okm1, L);
+    if (ret != 0)
+        return -2003;
+
+    if (memcmp(okm1, res2, L) != 0)
+        return -2004;
+#endif /* NO_SHA */
+
+#ifndef NO_SHA256
+    ret = HKDF(SHA256, ikm1, 22, NULL, 0, NULL, 0, okm1, L);
+    if (ret != 0)
+        return -2005;
+
+    if (memcmp(okm1, res3, L) != 0)
+        return -2006;
+
+    ret = HKDF(SHA256, ikm1, 22, salt1, 13, info1, 10, okm1, L);
+    if (ret != 0)
+        return -2007;
+
+    if (memcmp(okm1, res4, L) != 0)
+        return -2007;
+#endif /* NO_SHA256 */
+
+    return 0;
+}
+
+#endif /* HAVE_HKDF */
+
 
 #ifdef HAVE_ECC
 
@@ -3225,6 +3800,11 @@ int ecc_test(void)
     if (verify != 1)
         return -1012;
 
+    x = sizeof(exportBuf);
+    ret = ecc_export_private_only(&userA, exportBuf, &x);
+    if (ret != 0)
+        return -1013;
+
     ecc_free(&pubKey);
     ecc_free(&userB);
     ecc_free(&userA);
@@ -3232,6 +3812,134 @@ int ecc_test(void)
     return 0;
 }
 
+#ifdef HAVE_ECC_ENCRYPT
+
+int ecc_encrypt_test(void)
+{
+    RNG     rng;
+    int     ret;
+    ecc_key userA, userB;
+    byte    msg[48];
+    byte    plain[48];
+    byte    out[80];
+    word32  outSz   = sizeof(out);
+    word32  plainSz = sizeof(plain);
+    int     i;
+
+    ret = InitRng(&rng);
+    if (ret != 0)
+        return -3001;
+
+    ecc_init(&userA);
+    ecc_init(&userB);
+
+    ret  = ecc_make_key(&rng, 32, &userA);
+    ret += ecc_make_key(&rng, 32, &userB);
+
+    if (ret != 0)
+        return -3002;
+
+    for (i = 0; i < 48; i++)
+        msg[i] = i;
+
+    /* encrypt msg to B */
+    ret = ecc_encrypt(&userA, &userB, msg, sizeof(msg), out, &outSz, NULL);
+    if (ret != 0)
+        return -3003;
+
+    /* decrypt msg from A */
+    ret = ecc_decrypt(&userB, &userA, out, outSz, plain, &plainSz, NULL);
+    if (ret != 0)
+        return -3004;
+
+    if (memcmp(plain, msg, sizeof(msg)) != 0)
+        return -3005;
+
+    
+    {  /* let's verify message exchange works, A is client, B is server */
+        ecEncCtx* cliCtx = ecc_ctx_new(REQ_RESP_CLIENT, &rng);
+        ecEncCtx* srvCtx = ecc_ctx_new(REQ_RESP_SERVER, &rng);
+
+        byte cliSalt[EXCHANGE_SALT_SZ];
+        byte srvSalt[EXCHANGE_SALT_SZ];
+        const byte* tmpSalt;
+
+        if (cliCtx == NULL || srvCtx == NULL)
+            return -3006;
+
+        /* get salt to send to peer */
+        tmpSalt = ecc_ctx_get_own_salt(cliCtx);
+        if (tmpSalt == NULL)
+            return -3007;
+        memcpy(cliSalt, tmpSalt, EXCHANGE_SALT_SZ);
+
+        tmpSalt = ecc_ctx_get_own_salt(srvCtx);
+        if (tmpSalt == NULL)
+            return -3007;
+        memcpy(srvSalt, tmpSalt, EXCHANGE_SALT_SZ);
+
+        /* in actual use, we'd get the peer's salt over the transport */
+        ret  = ecc_ctx_set_peer_salt(cliCtx, srvSalt);
+        ret += ecc_ctx_set_peer_salt(srvCtx, cliSalt);
+
+        if (ret != 0)
+            return -3008;
+
+        /* get encrypted msg (request) to send to B */
+        outSz  = sizeof(out);
+        ret = ecc_encrypt(&userA, &userB, msg, sizeof(msg), out, &outSz,cliCtx);
+        if (ret != 0)
+            return -3009;
+
+        /* B decrypts msg (request) from A */
+        plainSz = sizeof(plain);
+        ret = ecc_decrypt(&userB, &userA, out, outSz, plain, &plainSz, srvCtx);
+        if (ret != 0)
+            return -3010;
+
+        if (memcmp(plain, msg, sizeof(msg)) != 0)
+            return -3011;
+
+        {
+            /* msg2 (response) from B to A */
+            byte    msg2[48];
+            byte    plain2[48];
+            byte    out2[80];
+            word32  outSz2   = sizeof(out2);
+            word32  plainSz2 = sizeof(plain2);
+
+            for (i = 0; i < 48; i++)
+                msg2[i] = i+48;
+
+            /* get encrypted msg (response) to send to B */
+            ret = ecc_encrypt(&userB, &userA, msg2, sizeof(msg2), out2,
+                              &outSz2, srvCtx);
+            if (ret != 0)
+                return -3012;
+
+            /* A decrypts msg (response) from B */
+            ret = ecc_decrypt(&userA, &userB, out2, outSz2, plain2, &plainSz2,
+                             cliCtx);
+            if (ret != 0)
+                return -3013;
+
+            if (memcmp(plain2, msg2, sizeof(msg2)) != 0)
+                return -3014;
+        }
+
+        /* cleanup */
+        ecc_ctx_free(srvCtx);
+        ecc_ctx_free(cliCtx);
+    }
+
+    /* cleanup */
+    ecc_free(&userB);
+    ecc_free(&userA);
+
+    return 0;
+}
+
+#endif /* HAVE_ECC_ENCRYPT */
 #endif /* HAVE_ECC */
 
 #ifdef HAVE_LIBZ
@@ -3350,3 +4058,269 @@ int compress_test(void)
 
 #endif /* HAVE_LIBZ */
 
+#ifdef HAVE_PKCS7
+
+int pkcs7enveloped_test(void)
+{
+    int ret = 0;
+
+    int cipher = DES3b;
+    int envelopedSz, decodedSz;
+    PKCS7 pkcs7;
+    byte* cert;
+    byte* privKey;
+    byte  enveloped[2048];
+    byte  decoded[2048];
+
+    size_t certSz;
+    size_t privKeySz;
+    FILE*  certFile;
+    FILE*  keyFile;
+    FILE*  pkcs7File;
+    const char* pkcs7OutFile = "pkcs7envelopedData.der";
+
+    const byte data[] = { /* Hello World */
+        0x48,0x65,0x6c,0x6c,0x6f,0x20,0x57,0x6f,
+        0x72,0x6c,0x64
+    };
+
+    /* read client cert and key in DER format */
+    cert = (byte*)malloc(FOURK_BUF);
+    if (cert == NULL)
+        return -201;
+
+    privKey = (byte*)malloc(FOURK_BUF);
+    if (privKey == NULL)
+        return -202;
+
+    certFile = fopen(clientCert, "rb");
+    if (!certFile)
+        err_sys("can't open ./certs/client-cert.der, "
+                "Please run from CyaSSL home dir", -42);
+
+    certSz = fread(cert, 1, FOURK_BUF, certFile);
+    fclose(certFile);
+
+    keyFile = fopen(clientKey, "rb");
+    if (!keyFile)
+        err_sys("can't open ./certs/client-key.der, "
+                "Please run from CyaSSL home dir", -43);
+
+    privKeySz = fread(privKey, 1, FOURK_BUF, keyFile);
+    fclose(keyFile);
+
+    PKCS7_InitWithCert(&pkcs7, cert, (word32)certSz);
+    pkcs7.content     = (byte*)data;
+    pkcs7.contentSz   = (word32)sizeof(data);
+    pkcs7.contentOID  = DATA;
+    pkcs7.encryptOID  = cipher;
+    pkcs7.privateKey  = privKey;
+    pkcs7.privateKeySz = (word32)privKeySz;
+
+    /* encode envelopedData */
+    envelopedSz = PKCS7_EncodeEnvelopedData(&pkcs7, enveloped,
+                                            sizeof(enveloped));
+    if (envelopedSz <= 0)
+        return -203;
+
+    /* decode envelopedData */
+    decodedSz = PKCS7_DecodeEnvelopedData(&pkcs7, enveloped, envelopedSz,
+                                          decoded, sizeof(decoded));
+    if (decodedSz <= 0)
+        return -204;
+
+    /* test decode result */
+    if (memcmp(decoded, data, sizeof(data)) != 0) {
+        return -205;
+    }
+
+    /* output pkcs7 envelopedData for external testing */
+    pkcs7File = fopen(pkcs7OutFile, "wb");
+    if (!pkcs7File)
+        return -206;
+
+    ret = (int)fwrite(enveloped, envelopedSz, 1, pkcs7File);
+    fclose(pkcs7File);
+
+    free(cert);
+    free(privKey);
+    PKCS7_Free(&pkcs7);
+
+    if (ret > 0)
+        return 0;
+
+    return ret;
+}
+
+int pkcs7signed_test(void)
+{
+    int ret = 0;
+
+    FILE* file;
+    byte* certDer;
+    byte* keyDer;
+    byte* out;
+    char data[] = "Hello World";
+    word32 dataSz, outSz, certDerSz, keyDerSz;
+    PKCS7 msg;
+    RNG rng;
+
+    byte transIdOid[] =
+               { 0x06, 0x0a, 0x60, 0x86, 0x48, 0x01, 0x86, 0xF8, 0x45, 0x01,
+                 0x09, 0x07 };
+    byte messageTypeOid[] =
+               { 0x06, 0x0a, 0x60, 0x86, 0x48, 0x01, 0x86, 0xF8, 0x45, 0x01,
+                 0x09, 0x02 };
+    byte senderNonceOid[] =
+               { 0x06, 0x0a, 0x60, 0x86, 0x48, 0x01, 0x86, 0xF8, 0x45, 0x01,
+                 0x09, 0x05 };
+    byte transId[(SHA_DIGEST_SIZE + 1) * 2 + 1];
+    byte messageType[] = { 0x13, 2, '1', '9' };
+    byte senderNonce[PKCS7_NONCE_SZ + 2];
+
+    PKCS7Attrib attribs[] =
+    {
+        { transIdOid, sizeof(transIdOid),
+                     transId, sizeof(transId) - 1 }, /* take off the null */
+        { messageTypeOid, sizeof(messageTypeOid),
+                     messageType, sizeof(messageType) },
+        { senderNonceOid, sizeof(senderNonceOid),
+                     senderNonce, sizeof(senderNonce) }
+    };
+
+    dataSz = (word32) strlen(data);
+    outSz = FOURK_BUF;
+
+    certDer = (byte*)malloc(FOURK_BUF);
+    keyDer = (byte*)malloc(FOURK_BUF);
+    out = (byte*)malloc(FOURK_BUF);
+
+    if (certDer == NULL)
+        return -207;
+    if (keyDer == NULL)
+        return -208;
+    if (out == NULL)
+        return -209;
+
+    /* read in DER cert of recipient, into cert of size certSz */
+    file = fopen(clientCert, "rb");
+    if (!file) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        err_sys("can't open ./certs/client-cert.der, "
+                "Please run from CyaSSL home dir", -44);
+    }
+    certDerSz = (word32)fread(certDer, 1, FOURK_BUF, file);
+    fclose(file);
+
+    file = fopen(clientKey, "rb");
+    if (!file) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        err_sys("can't open ./certs/client-key.der, "
+                "Please run from CyaSSL home dir", -45);
+    }
+    keyDerSz = (word32)fread(keyDer, 1, FOURK_BUF, file);
+    fclose(file);
+
+    ret = InitRng(&rng);
+    senderNonce[0] = 0x04;
+    senderNonce[1] = PKCS7_NONCE_SZ;
+    RNG_GenerateBlock(&rng, &senderNonce[2], PKCS7_NONCE_SZ);
+
+    PKCS7_InitWithCert(&msg, certDer, certDerSz);
+    msg.privateKey = keyDer;
+    msg.privateKeySz = keyDerSz;
+    msg.content = (byte*)data;
+    msg.contentSz = dataSz;
+    msg.hashOID = SHAh;
+    msg.encryptOID = RSAk;
+    msg.signedAttribs = attribs;
+    msg.signedAttribsSz = sizeof(attribs)/sizeof(PKCS7Attrib);
+    msg.rng = &rng;
+    {
+        Sha sha;
+        byte digest[SHA_DIGEST_SIZE];
+        int i,j;
+
+        transId[0] = 0x13;
+        transId[1] = SHA_DIGEST_SIZE * 2;
+
+        InitSha(&sha);
+        ShaUpdate(&sha, msg.publicKey, msg.publicKeySz);
+        ShaFinal(&sha, digest);
+
+        for (i = 0, j = 2; i < SHA_DIGEST_SIZE; i++, j += 2) {
+            snprintf((char*)&transId[j], 3, "%02x", digest[i]);
+        }
+    }
+    ret = PKCS7_EncodeSignedData(&msg, out, outSz);
+    if (ret < 0) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        PKCS7_Free(&msg);
+        return -210;
+    }
+    else
+        outSz = ret;
+
+    /* write PKCS#7 to output file for more testing */
+    file = fopen("./pkcs7signedData.der", "wb");
+    if (!file) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        PKCS7_Free(&msg);
+        return -211;
+    }
+    ret = (int)fwrite(out, 1, outSz, file);
+    fclose(file);
+
+    PKCS7_Free(&msg);
+    PKCS7_InitWithCert(&msg, NULL, 0);
+
+    ret = PKCS7_VerifySignedData(&msg, out, outSz);
+    if (ret < 0) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        PKCS7_Free(&msg);
+        return -212;
+    }
+
+    if (msg.singleCert == NULL || msg.singleCertSz == 0) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        PKCS7_Free(&msg);
+        return -213;
+    }
+
+    file = fopen("./pkcs7cert.der", "wb");
+    if (!file) {
+        free(certDer);
+        free(keyDer);
+        free(out);
+        PKCS7_Free(&msg);
+        return -214;
+    }
+    ret = (int)fwrite(msg.singleCert, 1, msg.singleCertSz, file);
+    fclose(file);
+
+    free(certDer);
+    free(keyDer);
+    free(out);
+    PKCS7_Free(&msg);
+
+    if (ret > 0)
+        return 0;
+
+    return ret;
+}
+
+#endif /* HAVE_PKCS7 */
+
+#endif /* NO_CRYPT_TEST */

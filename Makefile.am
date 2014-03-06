@@ -36,6 +36,7 @@ EXTRA_DIST+= cyassl-ntru.sln
 EXTRA_DIST+= cyassl.sln
 EXTRA_DIST+= valgrind-error.sh
 EXTRA_DIST+= gencertbuf.pl
+EXTRA_DIST+= IDE 
 
 include cyassl/include.am
 include certs/include.am
@@ -45,6 +46,7 @@ include doc/include.am
 include swig/include.am
 
 include src/include.am
+include support/include.am
 include ctaocrypt/benchmark/include.am
 include ctaocrypt/src/include.am
 include ctaocrypt/test/include.am
@@ -60,6 +62,7 @@ include mqx/ctaocrypt_test/Sources/include.am
 include mqx/cyassl/include.am
 include mqx/cyassl_client/Sources/include.am
 include mqx/util_lib/Sources/include.am
+include mplabx/include.am
 include mplabx/ctaocrypt_benchmark.X/nbproject/include.am
 include mplabx/ctaocrypt_test.X/nbproject/include.am
 include mplabx/cyassl.X/nbproject/include.am
@@ -99,6 +102,7 @@ maintainer-clean-local:
 	-rm m4/ltsugar.m4
 	-rm m4/ltversion.m4
 	-rm m4/lt~obsolete.m4
+	-rm support/cyassl.pc
 	find . -type f -name '*~' -exec rm -f '{}' \;
 	-rm -f @PACKAGE@-*.tar.gz
 	-rm -f @PACKAGE@-*.rpm

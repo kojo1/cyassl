@@ -35,6 +35,9 @@
 #else
     #include <ctaocrypt/src/misc.c>
 #endif
+#ifdef DEBUG_AESNI
+    #include <stdio.h>
+#endif
 
 
 #ifdef _MSC_VER
@@ -59,6 +62,7 @@
      * document (See note in README).
      */
     #include "stm32f2xx.h"
+    #include "stm32f2xx_cryp.h"
 
     int AesSetKey(Aes* aes, const byte* userKey, word32 keylen, const byte* iv,
                   int dir)
@@ -414,6 +418,230 @@
     }
 
     #endif /* CYASSL_AES_COUNTER */
+
+
+#elif  defined(HAVE_COLDFIRE_SEC)
+
+#include "sec.h"
+#include "mcf548x_sec.h"
+#include "mcf548x_siu.h"
+
+#include "memory_pools.h"
+extern TX_BYTE_POOL mp_ncached;  /* Non Cached memory pool */
+#define AES_BUFFER_SIZE (AES_BLOCK_SIZE * 8)
+static unsigned char *AESBuffer = NULL ;
+
+#define SEC_DESC_AES_CBC_ENCRYPT 0x60300010
+#define SEC_DESC_AES_CBC_DECRYPT 0x60200010
+#define AES_BLOCK_LENGTH 16
+
+extern volatile unsigned char __MBAR[];
+
+int AesCbcEncrypt(Aes* aes, byte* po, const byte* pi, word32 sz)
+{
+	//printf("AesCbcEncrypt(%x, %x, %x, %d)\n", aes, po, pi, sz) ;
+	return(AesCbcCrypt(aes, po, pi, sz, SEC_DESC_AES_CBC_ENCRYPT)) ;
+}
+
+int AesCbcDecrypt(Aes* aes, byte* po, const byte* pi, word32 sz)
+{
+	//printf("AesCbcDecrypt(%x, %x, %x, %d)\n", aes, po, pi, sz) ;
+	return(AesCbcCrypt(aes, po, pi, sz, SEC_DESC_AES_CBC_DECRYPT)) ;
+}
+	
+static int AesCbcCrypt(Aes* aes, byte* po, const byte* pi, word32 sz, word32 descHeader)
+{
+
+	int i ; int stat1, stat2 ;
+	int ret ; int size ;
+	static SECdescriptorType descriptor;
+	volatile int v ;
+    
+    if((pi == NULL) || (po == NULL))
+        return BAD_FUNC_ARG;/*wrong pointer*/
+    
+	while(sz) {
+		if((sz%AES_BUFFER_SIZE) == sz) {
+			size = sz ;
+			sz = 0 ;
+		} else {
+			size = AES_BUFFER_SIZE ;
+			sz -= AES_BUFFER_SIZE ;
+		}
+		
+   		/* Set descriptor for SEC */
+		descriptor.header = descHeader ;
+		/*
+		descriptor.length1 = 0x0;
+		descriptor.pointer1 = NULL;
+		*/
+		descriptor.length2 = AES_BLOCK_SIZE;
+		descriptor.pointer2 = (byte *)aes->reg ; /* Initial Vector */
+	
+		switch(aes->rounds) {
+			case 10: descriptor.length3 = 16 ; break ;
+			case 12: descriptor.length3 = 24 ; break ;
+			case 14: descriptor.length3 = 32 ; break ;
+		}
+
+		descriptor.pointer3 = (byte *)aes->key;
+		descriptor.length4 = size;
+		descriptor.pointer4 = (byte *)pi ;
+		descriptor.length5 = size;
+		descriptor.pointer5 = AESBuffer ;
+		/*
+		descriptor.length6 = 0x0;
+		descriptor.pointer6 = NULL;
+		descriptor.length7 = 0x0;
+		descriptor.pointer7 = NULL;
+		descriptor.nextDescriptorPtr = NULL;
+		*/
+		
+		/* Initialize SEC and wait for encryption to complete */
+		MCF_SEC_CCCR0 = 0x00000000;
+			
+		/* Point SEC to the location of the descriptor */
+		MCF_SEC_FR0 = (uint32)&descriptor;	
+
+		/* poll SISR to determine when channel is complete */
+		i=0 ;
+		while (!(MCF_SEC_SISRL) && !(MCF_SEC_SISRH))i++ ;
+		for(v=0; v<100; v++) ;
+		
+		ret = MCF_SEC_SISRH;
+		stat1 = MCF_SEC_AESSR ;	
+		stat2 = MCF_SEC_AESISR ;
+		if(ret & 0xe0000000)
+		{
+			db_printf("Aes_Cbc(i=%d):ISRH=%08x, AESSR=%08x, AESISR=%08x\n", i, ret, stat1, stat2) ;
+		}
+		
+		XMEMCPY(po, AESBuffer, size) ;
+
+		if(descHeader == SEC_DESC_AES_CBC_ENCRYPT) {
+			XMEMCPY((void*)aes->reg, (void*)&(po[size-AES_BLOCK_SIZE]), AES_BLOCK_SIZE) ;
+		} else {
+			XMEMCPY((void*)aes->reg, (void*)&(pi[size-AES_BLOCK_SIZE]), AES_BLOCK_SIZE) ;
+		}
+		
+		pi += size ; 
+		po += size ;
+	}
+	
+	return 0 ; /* for descriptier header 0xff000000 mode */
+}
+
+int AesSetKey(Aes* aes, const byte* userKey, word32 keylen, const byte* iv,
+                  int dir)
+{
+	int status ;
+	
+	if(AESBuffer == NULL) {
+		status = tx_byte_allocate(&mp_ncached,(void *)&AESBuffer, AES_BUFFER_SIZE,TX_NO_WAIT);
+	}
+
+    if (!((keylen == 16) || (keylen == 24) || (keylen == 32)))
+        return BAD_FUNC_ARG;
+    if (aes == NULL)
+        return BAD_FUNC_ARG;    
+    
+    aes->rounds = keylen/4 + 6;
+
+    XMEMCPY(aes->key, userKey, keylen);         
+    if (iv)
+        XMEMCPY(aes->reg, iv, AES_BLOCK_SIZE);
+    return 0;
+}
+
+#elif defined FREESCALE_MMCAU
+    /*
+     * Freescale mmCAU hardware AES support through the CAU/mmCAU library.
+     * Documentation located in ColdFire/ColdFire+ CAU and Kinetis mmCAU
+     * Software Library User Guide (See note in README).
+     */
+    #include "cau_api.h"
+
+    int AesSetKey(Aes* aes, const byte* userKey, word32 keylen, const byte* iv,
+                  int dir)
+    {
+        byte *rk = (byte*)aes->key;
+
+        if (!((keylen == 16) || (keylen == 24) || (keylen == 32)))
+            return BAD_FUNC_ARG;
+
+        if (rk == NULL)
+            return BAD_FUNC_ARG;
+
+        aes->rounds = keylen/4 + 6;
+        cau_aes_set_key(userKey, keylen*8, rk);
+
+        return AesSetIV(aes, iv);
+    }
+
+    int AesCbcEncrypt(Aes* aes, byte* out, const byte* in, word32 sz)
+    {
+        int i;
+        int offset = 0;
+        int len = sz;
+
+        byte *iv, *enc_key;
+        byte temp_block[AES_BLOCK_SIZE];
+
+        iv      = (byte*)aes->reg;
+        enc_key = (byte*)aes->key;
+
+        while (len > 0)
+        {
+            XMEMCPY(temp_block, in + offset, AES_BLOCK_SIZE);
+
+            /* XOR block with IV for CBC */
+            for (i = 0; i < AES_BLOCK_SIZE; i++)
+                temp_block[i] ^= iv[i];
+
+            cau_aes_encrypt(temp_block, enc_key, aes->rounds, out + offset);
+
+            len    -= AES_BLOCK_SIZE;
+            offset += AES_BLOCK_SIZE;
+
+            /* store IV for next block */
+            XMEMCPY(iv, out + offset - AES_BLOCK_SIZE, AES_BLOCK_SIZE);
+        }
+
+        return 0;
+    }
+
+    int AesCbcDecrypt(Aes* aes, byte* out, const byte* in, word32 sz)
+    {
+        int i;
+        int offset = 0;
+        int len = sz;
+
+        byte* iv, *dec_key;
+        byte temp_block[AES_BLOCK_SIZE];
+
+        iv      = (byte*)aes->reg;
+        dec_key = (byte*)aes->key;
+
+        while (len > 0)
+        {
+            XMEMCPY(temp_block, in + offset, AES_BLOCK_SIZE);
+
+            cau_aes_decrypt(in + offset, dec_key, aes->rounds, out + offset);
+
+            /* XOR block with IV for CBC */
+            for (i = 0; i < AES_BLOCK_SIZE; i++)
+                (out + offset)[i] ^= iv[i];
+
+            /* store IV for next block */
+            XMEMCPY(iv, temp_block, AES_BLOCK_SIZE);
+
+            len    -= AES_BLOCK_SIZE;
+            offset += AES_BLOCK_SIZE;
+        }
+
+        return 0;
+    }
+
 
 #else /* CTaoCrypt software implementation */
 
@@ -1147,6 +1375,15 @@ void AES_CBC_decrypt(const unsigned char* in, unsigned char* out,
                      const unsigned char* KS, int nr)
                      asm ("AES_CBC_decrypt");
 
+void AES_ECB_encrypt(const unsigned char* in, unsigned char* out,
+                     unsigned long length, const unsigned char* KS, int nr)
+                     asm ("AES_ECB_encrypt");
+
+
+void AES_ECB_decrypt(const unsigned char* in, unsigned char* out,
+                     unsigned long length, const unsigned char* KS, int nr)
+                     asm ("AES_ECB_decrypt");
+
 void AES_128_Key_Expansion(const unsigned char* userkey, 
                            unsigned char* key_schedule)
                            asm ("AES_128_Key_Expansion");
@@ -1239,6 +1476,10 @@ static int AesSetKeyLocal(Aes* aes, const byte* userKey, word32 keylen,
     #ifdef CYASSL_AESNI
         aes->use_aesni = 0;
     #endif /* CYASSL_AESNI */
+    #ifdef CYASSL_AES_COUNTER
+        aes->left = 0;
+    #endif /* CYASSL_AES_COUNTER */
+
     aes->rounds = keylen/4 + 6;
 
     XMEMCPY(rk, userKey, keylen);
@@ -1408,10 +1649,45 @@ static void AesEncrypt(Aes* aes, const byte* inBlock, byte* outBlock)
         return;  /* stop instead of segfaulting, set up your keys! */
     }
 #ifdef CYASSL_AESNI
-    if (aes->use_aesni) {
-        CYASSL_MSG("AesEncrypt encountered aesni keysetup, don't use direct");
-        return;  /* just stop now */
-    } 
+    if (haveAESNI && aes->use_aesni) {
+        #ifdef DEBUG_AESNI
+            printf("about to aes encrypt\n");
+            printf("in  = %p\n", inBlock);
+            printf("out = %p\n", outBlock);
+            printf("aes->key = %p\n", aes->key);
+            printf("aes->rounds = %d\n", aes->rounds);
+            printf("sz = %d\n", AES_BLOCK_SIZE);
+        #endif
+
+        /* check alignment, decrypt doesn't need alignment */
+        if ((word)inBlock % 16) {
+        #ifndef NO_CYASSL_ALLOC_ALIGN
+            byte* tmp = (byte*)XMALLOC(AES_BLOCK_SIZE, NULL,
+                                                      DYNAMIC_TYPE_TMP_BUFFER);
+            if (tmp == NULL) return;
+
+            XMEMCPY(tmp, inBlock, AES_BLOCK_SIZE);
+            AES_ECB_encrypt(tmp, tmp, AES_BLOCK_SIZE, (byte*)aes->key,
+                            aes->rounds);
+            XMEMCPY(outBlock, tmp, AES_BLOCK_SIZE);
+            XFREE(tmp, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+            return;
+        #else
+            CYASSL_MSG("AES-ECB encrypt with bad alignment");
+            return;
+        #endif
+        }
+
+        AES_ECB_encrypt(inBlock, outBlock, AES_BLOCK_SIZE, (byte*)aes->key,
+                        aes->rounds);
+
+        return;
+    }
+    else {
+        #ifdef DEBUG_AESNI
+            printf("Skipping AES-NI\n");
+        #endif
+    }
 #endif
 
     /*
@@ -1553,10 +1829,27 @@ static void AesDecrypt(Aes* aes, const byte* inBlock, byte* outBlock)
         return;  /* stop instead of segfaulting, set up your keys! */
     }
 #ifdef CYASSL_AESNI
-    if (aes->use_aesni) {
-        CYASSL_MSG("AesEncrypt encountered aesni keysetup, don't use direct");
-        return;  /* just stop now */
-    } 
+    if (haveAESNI && aes->use_aesni) {
+        #ifdef DEBUG_AESNI
+            printf("about to aes decrypt\n");
+            printf("in  = %p\n", inBlock);
+            printf("out = %p\n", outBlock);
+            printf("aes->key = %p\n", aes->key);
+            printf("aes->rounds = %d\n", aes->rounds);
+            printf("sz = %d\n", AES_BLOCK_SIZE);
+        #endif
+
+        /* if input and output same will overwrite input iv */
+        XMEMCPY(aes->tmp, inBlock, AES_BLOCK_SIZE);
+        AES_ECB_decrypt(inBlock, outBlock, AES_BLOCK_SIZE, (byte*)aes->key,
+                        aes->rounds);
+        return;
+    }
+    else {
+        #ifdef DEBUG_AESNI
+            printf("Skipping AES-NI\n");
+        #endif
+    }
 #endif
 
     /*
@@ -1840,15 +2133,39 @@ static INLINE void IncrementAesCounter(byte* inOutCtr)
 
 void AesCtrEncrypt(Aes* aes, byte* out, const byte* in, word32 sz)
 {
-    word32 blocks = sz / AES_BLOCK_SIZE;
+    byte* tmp = (byte*)aes->tmp + AES_BLOCK_SIZE - aes->left;
 
-    while (blocks--) {
+    /* consume any unused bytes left in aes->tmp */
+    while (aes->left && sz) {
+       *(out++) = *(in++) ^ *(tmp++);
+       aes->left--;
+       sz--;
+    }
+
+    /* do as many block size ops as possible */
+    while (sz >= AES_BLOCK_SIZE) {
         AesEncrypt(aes, (byte*)aes->reg, out);
         IncrementAesCounter((byte*)aes->reg);
         xorbuf(out, in, AES_BLOCK_SIZE);
 
         out += AES_BLOCK_SIZE;
-        in  += AES_BLOCK_SIZE; 
+        in  += AES_BLOCK_SIZE;
+        sz  -= AES_BLOCK_SIZE;
+        aes->left = 0;
+    }
+
+    /* handle non block size remaining and sotre unused byte count in left */
+    if (sz) {
+        AesEncrypt(aes, (byte*)aes->reg, (byte*)aes->tmp);
+        IncrementAesCounter((byte*)aes->reg);
+
+        aes->left = AES_BLOCK_SIZE;
+        tmp = (byte*)aes->tmp;
+
+        while (sz--) {
+            *(out++) = *(in++) ^ *(tmp++);
+            aes->left--;
+        }
     }
 }
 
@@ -1968,7 +2285,7 @@ void AesGcmSetKey(Aes* aes, const byte* key, word32 len)
         return;
 
     XMEMSET(iv, 0, AES_BLOCK_SIZE);
-    AesSetKeyLocal(aes, key, len, iv, AES_ENCRYPTION);
+    AesSetKey(aes, key, len, iv, AES_ENCRYPTION);
 
     AesEncrypt(aes, iv, aes->H);
 #ifdef GCM_TABLE
@@ -2212,8 +2529,9 @@ static void GHASH(Aes* aes, const byte* a, word32 aSz,
 static void GMULT(word64* X, word64* Y)
 {
     word64 Z[2] = {0,0};
-    word64 V[2] = {X[0], X[1]};
-    int i, j;
+    word64 V[2] ; 
+		int i, j;
+    V[0] = X[0] ;  V[1] = X[1] ;
 
     for (i = 0; i < 2; i++)
     {
@@ -2312,7 +2630,8 @@ static void GHASH(Aes* aes, const byte* a, word32 aSz,
 
     /* Hash in the lengths in bits of A and C */
     {
-        word64 len[2] = {aSz, cSz};
+        word64 len[2] ; 
+			  len[0] = aSz ; len[1] = cSz;
 
         /* Lengths are in bytes. Convert to bits. */
         len[0] *= 8;
@@ -2334,9 +2653,11 @@ static void GHASH(Aes* aes, const byte* a, word32 aSz,
 static void GMULT(word32* X, word32* Y)
 {
     word32 Z[4] = {0,0,0,0};
-    word32 V[4] = {X[0], X[1], X[2], X[3]};
+    word32 V[4] ;
     int i, j;
 
+    V[0] = X[0];  V[1] = X[1]; V[2] =  X[2]; V[3] =  X[3];
+			
     for (i = 0; i < 4; i++)
     {
         word32 y = Y[i];
@@ -2567,6 +2888,21 @@ int  AesGcmDecrypt(Aes* aes, byte* out, const byte* in, word32 sz,
     return 0;
 }
 
+
+CYASSL_API void GmacSetKey(Gmac* gmac, const byte* key, word32 len)
+{
+    AesGcmSetKey(&gmac->aes, key, len);
+}
+
+
+CYASSL_API void GmacUpdate(Gmac* gmac, const byte* iv, word32 ivSz,
+                              const byte* authIn, word32 authInSz,
+                              byte* authTag, word32 authTagSz)
+{
+    AesGcmEncrypt(&gmac->aes, NULL, NULL, 0, iv, ivSz,
+                                         authTag, authTagSz, authIn, authInSz);
+}
+
 #endif /* HAVE_AESGCM */
 
 #ifdef HAVE_AESCCM
@@ -2579,7 +2915,7 @@ void AesCcmSetKey(Aes* aes, const byte* key, word32 keySz)
         return;
 
     XMEMSET(nonce, 0, sizeof(nonce));
-    AesSetKeyLocal(aes, key, keySz, nonce, AES_ENCRYPTION);
+    AesSetKey(aes, key, keySz, nonce, AES_ENCRYPTION);
 }
 
 
@@ -2664,12 +3000,13 @@ void AesCcmEncrypt(Aes* aes, byte* out, const byte* in, word32 inSz,
 {
     byte A[AES_BLOCK_SIZE];
     byte B[AES_BLOCK_SIZE];
-    word32 i, lenSz;
+    byte lenSz;
+    word32 i;
 
     XMEMCPY(B+1, nonce, nonceSz);
-    lenSz = AES_BLOCK_SIZE - 1 - nonceSz;
+    lenSz = AES_BLOCK_SIZE - 1 - (byte)nonceSz;
     B[0] = (authInSz > 0 ? 64 : 0)
-         + (8 * ((authTagSz - 2) / 2))
+         + (8 * (((byte)authTagSz - 2) / 2))
          + (lenSz - 1);
     for (i = 0; i < lenSz; i++)
         B[AES_BLOCK_SIZE - 1 - i] = (inSz >> (8 * i)) & 0xFF;
@@ -2681,7 +3018,7 @@ void AesCcmEncrypt(Aes* aes, byte* out, const byte* in, word32 inSz,
         roll_x(aes, in, inSz, A);
     XMEMCPY(authTag, A, authTagSz);
 
-    B[0] = (lenSz - 1);
+    B[0] = lenSz - 1;
     for (i = 0; i < lenSz; i++)
         B[AES_BLOCK_SIZE - 1 - i] = 0;
     AesEncrypt(aes, B, A);
@@ -2717,14 +3054,16 @@ int  AesCcmDecrypt(Aes* aes, byte* out, const byte* in, word32 inSz,
     byte A[AES_BLOCK_SIZE];
     byte B[AES_BLOCK_SIZE];
     byte* o;
-    word32 i, lenSz, oSz, result = 0;
+    byte lenSz;
+    word32 i, oSz;
+    int result = 0;
 
     o = out;
     oSz = inSz;
     XMEMCPY(B+1, nonce, nonceSz);
-    lenSz = AES_BLOCK_SIZE - 1 - nonceSz;
+    lenSz = AES_BLOCK_SIZE - 1 - (byte)nonceSz;
 
-    B[0] = (lenSz - 1);
+    B[0] = lenSz - 1;
     for (i = 0; i < lenSz; i++)
         B[AES_BLOCK_SIZE - 1 - i] = 0;
     B[15] = 1;
@@ -2753,7 +3092,7 @@ int  AesCcmDecrypt(Aes* aes, byte* out, const byte* in, word32 inSz,
     oSz = inSz;
 
     B[0] = (authInSz > 0 ? 64 : 0)
-         + (8 * ((authTagSz - 2) / 2))
+         + (8 * (((byte)authTagSz - 2) / 2))
          + (lenSz - 1);
     for (i = 0; i < lenSz; i++)
         B[AES_BLOCK_SIZE - 1 - i] = (inSz >> (8 * i)) & 0xFF;
@@ -2764,7 +3103,7 @@ int  AesCcmDecrypt(Aes* aes, byte* out, const byte* in, word32 inSz,
     if (inSz > 0)
         roll_x(aes, o, oSz, A);
 
-    B[0] = (lenSz - 1);
+    B[0] = lenSz - 1;
     for (i = 0; i < lenSz; i++)
         B[AES_BLOCK_SIZE - 1 - i] = 0;
     AesEncrypt(aes, B, B);
@@ -2796,6 +3135,8 @@ int AesSetIV(Aes* aes, const byte* iv)
 
     if (iv)
         XMEMCPY(aes->reg, iv, AES_BLOCK_SIZE);
+    else
+        XMEMSET(aes->reg,  0, AES_BLOCK_SIZE);
 
     return 0;
 }

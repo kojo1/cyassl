@@ -25,6 +25,13 @@
 
 #include <cyassl/ctaocrypt/settings.h>
 
+#if defined(CYASSL_MDK_ARM)
+    #include <stdio.h>
+    #include <string.h>
+    #include <rtl.h>
+    #include "cyassl_MDK_ARM.h"
+#endif
+
 #include <cyassl/ssl.h>
 #include <cyassl/test.h>
 
@@ -39,6 +46,7 @@
     CYASSL_API void PrintSessionStats(void);
 #endif
 
+#define SVR_COMMAND_SIZE 256
 
 static void SignalReady(void* args, int port)
 {
@@ -99,7 +107,7 @@ THREAD_RETURN CYASSL_THREAD echoserver_test(void* args)
 #endif
 
     #if defined(NO_MAIN_DRIVER) && !defined(USE_WINDOWS_API) && \
-                                   !defined(CYASSL_SNIFFER)
+                      !defined(CYASSL_SNIFFER) && !defined(CYASSL_MDK_SHELL)
         port = 0;
     #endif
     #if defined(USE_ANY_ADDR)
@@ -192,7 +200,7 @@ THREAD_RETURN CYASSL_THREAD echoserver_test(void* args)
 
     while (!shutDown) {
         CYASSL* ssl = 0;
-        char    command[1024+1];
+        char    command[SVR_COMMAND_SIZE+1];
         int     echoSz = 0;
         int     clientfd;
         int     firstRead = 1;
@@ -328,11 +336,13 @@ THREAD_RETURN CYASSL_THREAD echoserver_test(void* args)
         args.argv = argv;
 
         CyaSSL_Init();
-#ifdef DEBUG_CYASSL
+#if defined(DEBUG_CYASSL) && !defined(CYASSL_MDK_SHELL)
         CyaSSL_Debugging_ON();
 #endif
-        if (CurrentDir("echoserver") || CurrentDir("build"))
+        if (CurrentDir("echoserver"))
             ChangeDirBack(2);
+        else if (CurrentDir("Debug") || CurrentDir("Release"))
+            ChangeDirBack(3);
         echoserver_test(&args);
         CyaSSL_Cleanup();
 
@@ -342,10 +352,9 @@ THREAD_RETURN CYASSL_THREAD echoserver_test(void* args)
         return args.return_code;
     }
 
-    int myoptind = 0;
-    char* myoptarg = NULL;
-
+        
 #endif /* NO_MAIN_DRIVER */
+
 
 
 

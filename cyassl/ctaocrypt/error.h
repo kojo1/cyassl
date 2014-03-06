@@ -33,13 +33,13 @@
 
 /* error codes */
 enum {
-    MAX_ERROR_SZ       =  80,   /* max size of error string */
     MAX_CODE_E         = -100,  /* errors -101 - -199 */
     OPEN_RAN_E         = -101,  /* opening random device error */
     READ_RAN_E         = -102,  /* reading random device error */
     WINCRYPT_E         = -103,  /* windows crypt init error */
     CRYPTGEN_E         = -104,  /* windows crypt generation error */
     RAN_BLOCK_E        = -105,  /* reading random device would block */
+    BAD_MUTEX_E        = -106,  /* Bad mutex operation */
 
     MP_INIT_E          = -110,  /* mp_init error state */
     MP_READ_E          = -111,  /* mp_read error state */
@@ -113,6 +113,14 @@ enum {
     ASN_CRL_CONFIRM_E   = -189,  /* ASN CRL signature confirm failure */
     ASN_CRL_NO_SIGNER_E = -190,  /* ASN CRL no signer to confirm failure */
     ASN_OCSP_CONFIRM_E  = -191,  /* ASN OCSP signature confirm failure */
+
+    BAD_ENC_STATE_E     = -192,  /* Bad ecc enc state operation */
+    BAD_PADDING_E       = -193,  /* Bad padding, msg not correct length  */
+
+    REQ_ATTRIBUTE_E     = -194,  /* setting cert request attributes error */
+
+    PKCS7_OID_E         = -195,  /* PKCS#7, mismatched OID error */
+    PKCS7_RECIP_E       = -196,  /* PKCS#7, recipient error */
 
     MIN_CODE_E         = -200   /* errors -101 - -199 */
 };

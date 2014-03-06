@@ -45,7 +45,10 @@
 /* Uncomment next line if using Microchip PIC32 ethernet starter kit */
 /* #define MICROCHIP_PIC32 */
 
-/* Uncomment next line if using Microchip TCP/IP stack, for time features */
+/* Uncomment next line if using Microchip TCP/IP stack, version 5 */
+/* #define MICROCHIP_TCPIP_V5 */
+
+/* Uncomment next line if using Microchip TCP/IP stack, version 6 or later */
 /* #define MICROCHIP_TCPIP */
 
 /* Uncomment next line if using FreeRTOS */
@@ -72,6 +75,12 @@
 /* Uncomment next line if using STM32F2 */
 /* #define CYASSL_STM32F2 */
 
+/* Uncomment next line if using Comverge settings */
+/* #define COMVERGE */
+
+/* Uncomment next line if using QL SEP settings */
+/* #define CYASSL_QL */
+
 
 #include <cyassl/ctaocrypt/visibility.h>
 
@@ -79,8 +88,30 @@
     #define SIZEOF_LONG_LONG 8
 #endif
 
+
+#ifdef COMVERGE
+    #define THREADX
+    #define HAVE_NETX
+    #define CYASSL_USER_IO
+    #define NO_WRITEV
+    #define NO_DEV_RANDOM
+    #define NO_FILESYSTEM
+    #define NO_SHA512
+    #define NO_DH
+    #define NO_DSA
+    #define NO_HC128
+    #define NO_RSA
+    #define NO_SESSION_CACHE
+    #define HAVE_ECC 
+#endif
+
+
 #ifdef THREADX 
     #define SIZEOF_LONG_LONG 8
+#endif
+
+#ifdef HAVE_NETX
+    #include "nx_api.h"
 #endif
 
 #ifdef MICROCHIP_PIC32
@@ -94,9 +125,19 @@
     #define TFM_TIMING_RESISTANT
 #endif
 
-#ifdef MICROCHIP_TCPIP
-    /* includes timer functions */
+#ifdef MICROCHIP_TCPIP_V5
+    /* include timer functions */
     #include "TCPIP Stack/TCPIP.h"
+#endif
+
+#ifdef MICROCHIP_TCPIP
+    /* include timer, NTP functions */
+    #include "system/system_services.h"
+    #ifdef MICROCHIP_MPLAB_HARMONY
+        #include "tcpip/tcpip.h"
+    #else
+        #include "tcpip/sntp.h"
+    #endif
 #endif
 
 #ifdef MBED
@@ -110,8 +151,38 @@
     #define NO_HC128
 #endif /* MBED */
 
+#ifdef CYASSL_TYTO
+    #include "rand.h"
+    #define FREERTOS
+    #define NO_FILESYSTEM
+    #define CYASSL_USER_IO
+    #define NO_DEV_RANDOM
+    #define HAVE_ECC
+    #define HAVE_ECC_ENCRYPT
+    #define ECC_SHAMIR
+    #define HAVE_HKDF
+    #define USE_FAST_MATH
+    #define TFM_TIMING_RESISTANT
+    #define FP_MAX_BITS 512
+    #define NO_OLD_TLS
+    #define NO_MD4
+    #define NO_RABBIT
+    #define NO_HC128
+    #define NO_RSA
+    #define NO_DSA
+    #define NO_PWDBASED
+    #define NO_PSK
+#endif
+
 #ifdef FREERTOS_WINSIM
     #define FREERTOS
+    #define USE_WINDOWS_API
+#endif
+
+
+/* Micrium will use Visual Studio for compilation but not the Win32 API */
+#if defined(_WIN32) && !defined(MICRIUM) && !defined(FREERTOS) \
+        && !defined(EBSNET)
     #define USE_WINDOWS_API
 #endif
 
@@ -251,6 +322,8 @@
     #define USE_FAST_MATH
     #define TFM_TIMING_RESISTANT
     #define FREESCALE_K70_RNGA
+    /* #define FREESCALE_K53_RNGB */
+    #include "mqx.h"
     #ifndef NO_FILESYSTEM
         #include "mfs.h"
         #include "fio.h"
@@ -259,8 +332,8 @@
         #include "mutex.h"
     #endif
 
-    #define XMALLOC(s, h, type) (void *)_mem_alloc_system((s))
-    #define XFREE(p, h, type)   _mem_free(p)
+    #define XMALLOC(s, h, t)    (void *)_mem_alloc_system((s))
+    #define XFREE(p, h, t)      {void* xp = (p); if ((xp)) _mem_free((xp));}
     /* Note: MQX has no realloc, using fastmath above */
 #endif
 
@@ -470,6 +543,37 @@
 #endif /* MICRIUM */
 
 
+#ifdef CYASSL_QL
+    #ifndef CYASSL_SEP
+        #define CYASSL_SEP
+    #endif
+    #ifndef OPENSSL_EXTRA
+        #define OPENSSL_EXTRA
+    #endif
+    #ifndef SESSION_CERTS
+        #define SESSION_CERTS
+    #endif
+    #ifndef HAVE_AESCCM
+        #define HAVE_AESCCM
+    #endif
+    #ifndef ATOMIC_USER
+        #define ATOMIC_USER
+    #endif
+    #ifndef CYASSL_DER_LOAD
+        #define CYASSL_DER_LOAD
+    #endif
+    #ifndef KEEP_PEER_CERT
+        #define KEEP_PEER_CERT
+    #endif
+    #ifndef HAVE_ECC
+        #define HAVE_ECC
+    #endif
+    #ifndef SESSION_INDEX
+        #define SESSION_INDEX
+    #endif
+#endif /* CYASSL_QL */
+
+
 #if !defined(XMALLOC_USER) && !defined(MICRIUM_MALLOC) && \
     !defined(CYASSL_LEANPSK) && !defined(NO_CYASSL_MEMORY)
     #define USE_CYASSL_MEMORY
@@ -503,6 +607,12 @@
     #else 
         #define CYASSL_GENERAL_ALIGNMENT  0 
     #endif
+#endif
+
+#ifdef HAVE_CRL
+    /* not widely supported yet */
+    #undef NO_SKID
+    #define NO_SKID
 #endif
 
 /* Place any other flags or defines here */

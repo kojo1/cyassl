@@ -30,6 +30,13 @@
     #define CYASSL_TRACK_MEMORY
 #endif
 
+#if defined(CYASSL_MDK_ARM)
+    #include <stdio.h>
+    #include <string.h>
+    #include <rtl.h>
+    #include "cyassl_MDK_ARM.h"
+#endif
+
 #include <cyassl/openssl/ssl.h>
 #include <cyassl/test.h>
 
@@ -115,7 +122,19 @@ static void Usage(void)
            " add -v 2 for DTLSv1 (default), -v 3 for DTLSv1.2\n");
     printf("-f          Fewer packets/group messages\n");
     printf("-N          Use Non-blocking sockets\n");
+    printf("-S <str>    Use Host Name Indication\n");
+#ifdef HAVE_OCSP
+    printf("-o          Perform OCSP lookup on peer certificate\n");
+    printf("-O <url>    Perform OCSP lookup using <url> as responder\n");
+#endif
+#ifdef HAVE_PK_CALLBACKS 
+    printf("-P          Public Key Callbacks\n");
+#endif
 }
+
+#ifdef CYASSL_MDK_SHELL
+#define exit(code) return(code)
+#endif
 
 
 THREAD_RETURN CYASSL_THREAD server_test(void* args)
@@ -141,12 +160,22 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     int    nonBlocking  = 0;
     int    trackMemory  = 0;
     int    fewerPackets = 0;
+    int    pkCallbacks  = 0;
     char*  cipherList = NULL;
     char*  verifyCert = (char*)cliCert;
     char*  ourCert    = (char*)svrCert;
     char*  ourKey     = (char*)svrKey;
     int    argc = ((func_args*)args)->argc;
     char** argv = ((func_args*)args)->argv;
+
+#ifdef HAVE_SNI
+    char*  sniHostName = NULL;
+#endif
+
+#ifdef HAVE_OCSP
+    int    useOcsp  = 0;
+    char*  ocspUrl  = NULL;
+#endif
 
     ((func_args*)args)->return_code = -1; /* error state */
 
@@ -156,8 +185,9 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     ourKey     = (char*)eccKey;
 #endif
     (void)trackMemory;
+    (void)pkCallbacks;
 
-    while ((ch = mygetopt(argc, argv, "?dbstnNufp:v:l:A:c:k:")) != -1) {
+    while ((ch = mygetopt(argc, argv, "?dbstnNufPp:v:l:A:c:k:S:oO:")) != -1) {
         switch (ch) {
             case '?' :
                 Usage();
@@ -191,6 +221,12 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
 
             case 'f' :
                 fewerPackets = 1;
+                break;
+
+            case 'P' :
+            #ifdef HAVE_PK_CALLBACKS 
+                pkCallbacks = 1;
+            #endif
                 break;
 
             case 'p' :
@@ -229,6 +265,25 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
                 nonBlocking = 1;
                 break;
 
+            case 'S' :
+                #ifdef HAVE_SNI
+                    sniHostName = myoptarg;
+                #endif
+                break;
+
+            case 'o' :
+                #ifdef HAVE_OCSP
+                    useOcsp = 1;
+                #endif
+                break;
+
+            case 'O' :
+                #ifdef HAVE_OCSP
+                    useOcsp = 1;
+                    ocspUrl = myoptarg;
+                #endif
+                break;
+
             default:
                 Usage();
                 exit(MY_EX_USAGE);
@@ -264,19 +319,25 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
             method = SSLv3_server_method();
             break;
 
+    #ifndef NO_TLS
         case 1:
             method = TLSv1_server_method();
             break;
 
+
         case 2:
             method = TLSv1_1_server_method();
             break;
+
+        #endif
 #endif
 
+#ifndef NO_TLS
         case 3:
             method = TLSv1_2_server_method();
             break;
-
+#endif
+                
 #ifdef CYASSL_DTLS
         case -1:
             method = DTLSv1_server_method();
@@ -313,6 +374,10 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     if (fewerPackets)
         CyaSSL_CTX_set_group_messages(ctx);
 
+#ifdef OPENSSL_EXTRA
+    SSL_CTX_set_default_passwd_cb(ctx, PasswordCallBack);
+#endif
+
 #if !defined(NO_FILESYSTEM) && !defined(NO_CERTS)
     if (!usePsk) {
         if (SSL_CTX_use_certificate_file(ctx, ourCert, SSL_FILETYPE_PEM)
@@ -335,8 +400,8 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     if (!useNtruKey && !usePsk) {
         if (SSL_CTX_use_PrivateKey_file(ctx, ourKey, SSL_FILETYPE_PEM)
                                          != SSL_SUCCESS)
-            err_sys("can't load server cert file, check file and run from"
-                " CyaSSL home dir");
+            err_sys("can't load server private key file, check file and run "
+                "from CyaSSL home dir");
     }
 #endif
 
@@ -367,16 +432,19 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     }
 #endif
 
-#ifdef OPENSSL_EXTRA
-    SSL_CTX_set_default_passwd_cb(ctx, PasswordCallBack);
-#endif
-
 #if defined(CYASSL_SNIFFER) && !defined(HAVE_NTRU) && !defined(HAVE_ECC)
     /* don't use EDH, can't sniff tmp keys */
     if (cipherList == NULL) {
         if (SSL_CTX_set_cipher_list(ctx, "AES256-SHA256") != SSL_SUCCESS)
             err_sys("server can't set cipher list 3");
     }
+#endif
+
+#ifdef HAVE_SNI
+    if (sniHostName)
+        if (CyaSSL_CTX_UseSNI(ctx, CYASSL_SNI_HOST_NAME, sniHostName,
+                                           XSTRLEN(sniHostName)) != SSL_SUCCESS)
+            err_sys("UseSNI failed");
 #endif
 
     ssl = SSL_new(ctx);
@@ -389,6 +457,22 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
                                                      CYASSL_CRL_START_MON);
     CyaSSL_SetCRL_Cb(ssl, CRL_CallBack);
 #endif
+#ifdef HAVE_OCSP
+    if (useOcsp) {
+        if (ocspUrl != NULL) {
+            CyaSSL_CTX_SetOCSP_OverrideURL(ctx, ocspUrl);
+            CyaSSL_CTX_EnableOCSP(ctx, CYASSL_OCSP_NO_NONCE
+                                                    | CYASSL_OCSP_URL_OVERRIDE);
+        }
+        else
+            CyaSSL_CTX_EnableOCSP(ctx, CYASSL_OCSP_NO_NONCE);
+    }
+#endif
+#ifdef HAVE_PK_CALLBACKS
+    if (pkCallbacks)
+        SetupPkCallbacks(ctx, ssl);
+#endif
+
     tcp_accept(&sockfd, &clientfd, (func_args*)args, port, useAnyAddr, doDTLS);
     if (!doDTLS) 
         CloseSocket(sockfd);
@@ -409,7 +493,7 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
         NonBlockingSSL_Accept(ssl);
     } else if (SSL_accept(ssl) != SSL_SUCCESS) {
         int err = SSL_get_error(ssl, 0);
-        char buffer[80];
+        char buffer[CYASSL_MAX_ERROR_SZ];
         printf("error = %d, %s\n", err, ERR_error_string(err, buffer));
         err_sys("SSL_accept failed");
     }
@@ -432,6 +516,10 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
 
     if (SSL_write(ssl, msg, sizeof(msg)) != sizeof(msg))
         err_sys("SSL_write failed");
+        
+    #if defined(CYASSL_MDK_SHELL) && defined(HAVE_MDK_RTX)
+        os_dly_wait(500) ;
+    #endif
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
@@ -468,11 +556,13 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
         args.argv = argv;
 
         CyaSSL_Init();
-#ifdef DEBUG_CYASSL
+#if defined(DEBUG_CYASSL) && !defined(CYASSL_MDK_SHELL)
         CyaSSL_Debugging_ON();
 #endif
-        if (CurrentDir("server") || CurrentDir("build"))
+        if (CurrentDir("server"))
             ChangeDirBack(2);
+        else if (CurrentDir("Debug") || CurrentDir("Release"))
+            ChangeDirBack(3);
    
 #ifdef HAVE_STACK_SIZE
         StackSizeCheck(&args, server_test);
@@ -509,5 +599,4 @@ THREAD_RETURN CYASSL_THREAD server_test(void* args)
     }
 
 #endif
-
 

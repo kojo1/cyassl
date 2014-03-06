@@ -24,6 +24,7 @@
 #define CTAO_CRYPT_TYPES_H
 
 #include <cyassl/ctaocrypt/settings.h>
+#include <cyassl/ctaocrypt/port.h>
 
 #ifdef __cplusplus
     extern "C" {
@@ -54,7 +55,7 @@
                 || defined(__mips64)  || defined(__x86_64__)) 
             /* long should be 64bit */
             #define SIZEOF_LONG 8
-        #elif defined(__i386__) 
+        #elif defined(__i386__) || defined(__CORTEX_M3__)
             /* long long should be 64bit */
             #define SIZEOF_LONG_LONG 8
         #endif
@@ -111,10 +112,10 @@ enum {
         #define INLINE __inline
     #elif defined(__GNUC__)
         #define INLINE inline
-    #elif defined(THREADX)
-        #define INLINE _Inline
     #elif defined(__IAR_SYSTEMS_ICC__)
         #define INLINE inline
+    #elif defined(THREADX)
+        #define INLINE _Inline
     #else
         #define INLINE 
     #endif
@@ -135,6 +136,18 @@ enum {
         /* GCC does peephole optimizations which should result in using rotate
            instructions  */
 	#define FAST_ROTATE
+#endif
+
+
+/* set up thread local storage if available */
+#ifdef HAVE_THREAD_LS
+    #if defined(_MSC_VER)
+        #define THREAD_LS_T __declspec(thread)
+    #else
+        #define THREAD_LS_T __thread
+    #endif
+#else
+    #define THREAD_LS_T
 #endif
 
 
@@ -188,44 +201,57 @@ enum {
     #define XSTRNSTR(s1,s2,n) mystrnstr((s1),(s2),(n))
     #define XSTRNCMP(s1,s2,n) strncmp((s1),(s2),(n))
     #define XSTRNCAT(s1,s2,n) strncat((s1),(s2),(n))
-    #define XSTRNCASECMP(s1,s2,n) strncasecmp((s1),(s2),(n))
+    #ifndef USE_WINDOWS_API
+        #define XSTRNCASECMP(s1,s2,n) strncasecmp((s1),(s2),(n))
+        #define XSNPRINTF snprintf
+    #else
+        #define XSTRNCASECMP(s1,s2,n) _strnicmp((s1),(s2),(n))
+        #define XSNPRINTF _snprintf
+    #endif
 #endif
 
-#if defined(HAVE_ECC) || defined(HAVE_OCSP)
-    #ifndef CTYPE_USER
-        #include <ctype.h>
+#ifndef CTYPE_USER
+    #include <ctype.h>
+    #if defined(HAVE_ECC) || defined(HAVE_OCSP)
         #define XTOUPPER(c)     toupper((c))
         #define XISALPHA(c)     isalpha((c))
     #endif
+    /* needed by CyaSSL_check_domain_name() */
+    #ifdef __CYGWIN__
+        /* Cygwin uses a macro version of tolower() by default, use the
+         * function version. */
+        #undef tolower
+    #endif
+    #define XTOLOWER(c)      tolower((c))
 #endif
 
 
 /* memory allocation types for user hints */
 enum {
-    DYNAMIC_TYPE_CA         = 1,
-    DYNAMIC_TYPE_CERT       = 2,
-    DYNAMIC_TYPE_KEY        = 3,
-    DYNAMIC_TYPE_FILE       = 4,
-    DYNAMIC_TYPE_SUBJECT_CN = 5,
-    DYNAMIC_TYPE_PUBLIC_KEY = 6,
-    DYNAMIC_TYPE_SIGNER     = 7,
-    DYNAMIC_TYPE_NONE       = 8,
-    DYNAMIC_TYPE_BIGINT     = 9,
-    DYNAMIC_TYPE_RSA        = 10,
-    DYNAMIC_TYPE_METHOD     = 11,
-    DYNAMIC_TYPE_OUT_BUFFER = 12,
-    DYNAMIC_TYPE_IN_BUFFER  = 13,
-    DYNAMIC_TYPE_INFO       = 14,
-    DYNAMIC_TYPE_DH         = 15,
-    DYNAMIC_TYPE_DOMAIN     = 16,
-    DYNAMIC_TYPE_SSL        = 17,
-    DYNAMIC_TYPE_CTX        = 18,
-    DYNAMIC_TYPE_WRITEV     = 19,
-    DYNAMIC_TYPE_OPENSSL    = 20,
-    DYNAMIC_TYPE_DSA        = 21,
-    DYNAMIC_TYPE_CRL        = 22,
-    DYNAMIC_TYPE_REVOKED    = 23,
-    DYNAMIC_TYPE_CRL_ENTRY  = 24,
+    DYNAMIC_TYPE_CA           = 1,
+    DYNAMIC_TYPE_CERT         = 2,
+    DYNAMIC_TYPE_KEY          = 3,
+    DYNAMIC_TYPE_FILE         = 4,
+    DYNAMIC_TYPE_SUBJECT_CN   = 5,
+    DYNAMIC_TYPE_PUBLIC_KEY   = 6,
+    DYNAMIC_TYPE_SIGNER       = 7,
+    DYNAMIC_TYPE_NONE         = 8,
+    DYNAMIC_TYPE_BIGINT       = 9,
+    DYNAMIC_TYPE_RSA          = 10,
+    DYNAMIC_TYPE_METHOD       = 11,
+    DYNAMIC_TYPE_OUT_BUFFER   = 12,
+    DYNAMIC_TYPE_IN_BUFFER    = 13,
+    DYNAMIC_TYPE_INFO         = 14,
+    DYNAMIC_TYPE_DH           = 15,
+    DYNAMIC_TYPE_DOMAIN       = 16,
+    DYNAMIC_TYPE_SSL          = 17,
+    DYNAMIC_TYPE_CTX          = 18,
+    DYNAMIC_TYPE_WRITEV       = 19,
+    DYNAMIC_TYPE_OPENSSL      = 20,
+    DYNAMIC_TYPE_DSA          = 21,
+    DYNAMIC_TYPE_CRL          = 22,
+    DYNAMIC_TYPE_REVOKED      = 23,
+    DYNAMIC_TYPE_CRL_ENTRY    = 24,
     DYNAMIC_TYPE_CERT_MANAGER = 25,
     DYNAMIC_TYPE_CRL_MONITOR  = 26,
     DYNAMIC_TYPE_OCSP_STATUS  = 27,
@@ -243,7 +269,14 @@ enum {
     DYNAMIC_TYPE_DTLS_MSG     = 39,
     DYNAMIC_TYPE_CAVIUM_TMP   = 40,
     DYNAMIC_TYPE_CAVIUM_RSA   = 41,
-    DYNAMIC_TYPE_X509         = 42 
+    DYNAMIC_TYPE_X509         = 42,
+    DYNAMIC_TYPE_TLSX         = 43,
+    DYNAMIC_TYPE_OCSP         = 44
+};
+
+/* max error buffer string size */
+enum {
+    CYASSL_MAX_ERROR_SZ = 80
 };
 
 /* stack protection */

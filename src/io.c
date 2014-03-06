@@ -55,6 +55,20 @@
     #elif defined(FREESCALE_MQX)
         #include <posix.h>
         #include <rtcs.h>
+    #elif defined(CYASSL_MDK_ARM)
+        #if defined(CYASSL_MDK5)
+            #include "cmsis_os.h"
+            #include "rl_fs.h" 
+            #include "rl_net.h" 
+        #else
+            #include <rtl.h>
+        #endif
+        #undef RNG
+        #include "CYASSL_MDK_ARM.h"
+        #undef RNG
+        #define RNG CyaSSL_RNG 
+        /* for avoiding name conflict in "stm32f2xx.h" */
+        static int errno;
     #else
         #include <sys/types.h>
         #include <errno.h>
@@ -62,7 +76,7 @@
             #include <unistd.h>
         #endif
         #include <fcntl.h>
-        #if !(defined(DEVKITPRO) || defined(THREADX) || defined(EBSNET))
+        #if !(defined(DEVKITPRO) || defined(HAVE_RTP_SYS) || defined(EBSNET))
             #include <sys/socket.h>
             #include <arpa/inet.h>
             #include <netinet/in.h>
@@ -73,7 +87,7 @@
                 #include <sys/ioctl.h>
             #endif
         #endif
-        #ifdef THREADX
+        #ifdef HAVE_RTP_SYS
             #include <socket.h>
         #endif
         #ifdef EBSNET
@@ -99,6 +113,7 @@
     #define SOCKET_EPIPE       WSAEPIPE
     #define SOCKET_ECONNREFUSED WSAENOTCONN
     #define SOCKET_ECONNABORTED WSAECONNABORTED
+    #define close(s) closesocket(s)
 #elif defined(__PPU)
     #define SOCKET_EWOULDBLOCK SYS_NET_EWOULDBLOCK
     #define SOCKET_EAGAIN      SYS_NET_EAGAIN
@@ -116,6 +131,24 @@
     #define SOCKET_EPIPE       EPIPE
     #define SOCKET_ECONNREFUSED RTCSERR_TCP_CONN_REFUSED
     #define SOCKET_ECONNABORTED RTCSERR_TCP_CONN_ABORTED
+#elif defined(CYASSL_MDK_ARM)
+    #if defined(CYASSL_MDK5)
+        #define SOCKET_EWOULDBLOCK BSD_ERROR_WOULDBLOCK
+        #define SOCKET_EAGAIN      BSD_ERROR_LOCKED
+        #define SOCKET_ECONNRESET  BSD_ERROR_CLOSED
+        #define SOCKET_EINTR       BSD_ERROR
+        #define SOCKET_EPIPE       BSD_ERROR
+        #define SOCKET_ECONNREFUSED BSD_ERROR
+        #define SOCKET_ECONNABORTED BSD_ERROR
+    #else
+        #define SOCKET_EWOULDBLOCK SCK_EWOULDBLOCK
+        #define SOCKET_EAGAIN      SCK_ELOCKED
+        #define SOCKET_ECONNRESET  SCK_ECLOSED
+        #define SOCKET_EINTR       SCK_ERROR
+        #define SOCKET_EPIPE       SCK_ERROR
+        #define SOCKET_ECONNREFUSED SCK_ERROR
+        #define SOCKET_ECONNABORTED SCK_ERROR
+    #endif
 #else
     #define SOCKET_EWOULDBLOCK EWOULDBLOCK
     #define SOCKET_EAGAIN      EAGAIN
@@ -319,7 +352,7 @@ int EmbedReceiveFrom(CYASSL *ssl, char *buf, int sz, void *ctx)
     int err;
     int sd = dtlsCtx->fd;
     int dtls_timeout = CyaSSL_dtls_get_current_timeout(ssl);
-    struct sockaddr_in peer;
+    struct sockaddr_storage peer;
     XSOCKLENT peerSz = sizeof(peer);
 
     CYASSL_ENTER("EmbedReceiveFrom()");
@@ -438,93 +471,90 @@ int EmbedSendTo(CYASSL* ssl, char *buf, int sz, void *ctx)
 int EmbedGenerateCookie(CYASSL* ssl, byte *buf, int sz, void *ctx)
 {
     int sd = ssl->wfd;
-    struct sockaddr_in peer;
+    struct sockaddr_storage peer;
     XSOCKLENT peerSz = sizeof(peer);
-    byte cookieSrc[sizeof(struct in_addr) + sizeof(int)];
-    int cookieSrcSz = 0;
     Sha sha;
+    byte digest[SHA_DIGEST_SIZE];
 
     (void)ctx;
 
+    XMEMSET(&peer, 0, sizeof(peer));
     if (getpeername(sd, (struct sockaddr*)&peer, &peerSz) != 0) {
         CYASSL_MSG("getpeername failed in EmbedGenerateCookie");
         return GEN_COOKIE_E;
     }
     
-    if (peer.sin_family == AF_INET) {
-        struct sockaddr_in *s = (struct sockaddr_in*)&peer;
-
-        cookieSrcSz = sizeof(struct in_addr) + sizeof(s->sin_port);
-        XMEMCPY(cookieSrc, &s->sin_port, sizeof(s->sin_port));
-        XMEMCPY(cookieSrc + sizeof(s->sin_port),
-                                     &s->sin_addr, sizeof(struct in_addr));
-    }
-
     InitSha(&sha);
-    ShaUpdate(&sha, cookieSrc, cookieSrcSz);
+    ShaUpdate(&sha, (byte*)&peer, peerSz);
+    ShaFinal(&sha, digest);
 
-    if (sz < SHA_DIGEST_SIZE) {
-        byte digest[SHA_DIGEST_SIZE];
-        ShaFinal(&sha, digest);
-        XMEMCPY(buf, digest, sz);
-        return sz;
-    }
+    if (sz > SHA_DIGEST_SIZE)
+        sz = SHA_DIGEST_SIZE;
+    XMEMCPY(buf, digest, sz);
 
-    ShaFinal(&sha, buf);
-
-    return SHA_DIGEST_SIZE;
+    return sz;
 }
 
 #endif /* CYASSL_DTLS */
 
 #ifdef HAVE_OCSP
 
-#ifdef TEST_IPV6
-    typedef struct sockaddr_in6 SOCKADDR_IN_T;
-    #define AF_INET_V    AF_INET6
-#else
-    typedef struct sockaddr_in  SOCKADDR_IN_T;
-    #define AF_INET_V    AF_INET
-#endif
 
-
-static INLINE int tcp_connect(SOCKET_T* sockfd, const char* ip, word16 port)
+static int tcp_connect(SOCKET_T* sockfd, const char* ip, word16 port)
 {
-    SOCKADDR_IN_T addr;
-    const char* host = ip;
+    struct sockaddr_storage addr;
+    int sockaddr_len = sizeof(struct sockaddr_in);
+    XMEMSET(&addr, 0, sizeof(addr));
 
-    /* peer could be in human readable form */
-    if (ip != INADDR_ANY && isalpha(ip[0])) {
+    #ifdef HAVE_GETADDRINFO
+    {
+        struct addrinfo hints;
+        struct addrinfo* answer = NULL;
+        char strPort[8];
+
+        XMEMSET(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+
+        XSNPRINTF(strPort, sizeof(strPort), "%d", port);
+        strPort[7] = '\0';
+
+        if (getaddrinfo(ip, strPort, &hints, &answer) < 0 || answer == NULL) {
+            CYASSL_MSG("no addr info for OCSP responder");
+            return -1;
+        }
+
+        sockaddr_len = answer->ai_addrlen;
+        XMEMCPY(&addr, answer->ai_addr, sockaddr_len);
+        freeaddrinfo(answer);
+
+    }
+    #else /* HAVE_GETADDRINFO */
+    {
         struct hostent* entry = gethostbyname(ip);
+        struct sockaddr_in *sin = (struct sockaddr_in *)&addr;
 
         if (entry) {
-            struct sockaddr_in tmp;
-            XMEMSET(&tmp, 0, sizeof(struct sockaddr_in));
-            XMEMCPY(&tmp.sin_addr.s_addr, entry->h_addr_list[0],
-                   entry->h_length);
-            host = inet_ntoa(tmp.sin_addr);
+            sin->sin_family = AF_INET;
+            sin->sin_port = htons(port);
+            XMEMCPY(&sin->sin_addr.s_addr, entry->h_addr_list[0],
+                                                               entry->h_length);
         }
         else {
-            CYASSL_MSG("no addr entry for OCSP responder");
+            CYASSL_MSG("no addr info for OCSP responder");
             return -1;
         }
     }
+    #endif /* HAVE_GETADDRINFO */
 
-    *sockfd = socket(AF_INET_V, SOCK_STREAM, 0);
+    *sockfd = socket(addr.ss_family, SOCK_STREAM, 0);
     if (*sockfd < 0) {
         CYASSL_MSG("bad socket fd, out of fds?");
         return -1;
     }
-    XMEMSET(&addr, 0, sizeof(SOCKADDR_IN_T));
 
-    addr.sin_family = AF_INET_V;
-    addr.sin_port = htons(port);
-    if (host == INADDR_ANY)
-        addr.sin_addr.s_addr = INADDR_ANY;
-    else
-        addr.sin_addr.s_addr = inet_addr(host);
-
-    if (connect(*sockfd, (const struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (connect(*sockfd, (struct sockaddr *)&addr, sockaddr_len) != 0) {
         CYASSL_MSG("OCSP responder tcp connect failed");
         return -1;
     }
@@ -536,7 +566,7 @@ static INLINE int tcp_connect(SOCKET_T* sockfd, const char* ip, word16 port)
 static int build_http_request(const char* domainName, const char* path,
                                     int ocspReqSz, byte* buf, int bufSize)
 {
-    return snprintf((char*)buf, bufSize,
+    return XSNPRINTF((char*)buf, bufSize,
         "POST %s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Content-Length: %d\r\n"
@@ -546,73 +576,11 @@ static int build_http_request(const char* domainName, const char* path,
 }
 
 
-static int decode_http_response(byte* httpBuf, int httpBufSz, byte** dst)
-{
-    int idx = 0;
-    int stop = 0;
-    int len = 0;
-    byte* contentType = NULL;
-    byte* contentLength = NULL;
-    char* buf = (char*)httpBuf; /* kludge so I'm not constantly casting */
-
-    if (XSTRNCASECMP(buf, "HTTP/1", 6) != 0)
-        return 0;
-    
-    idx = 9; /* sets to the first byte after "HTTP/1.X ", which should be the
-              * HTTP result code */
-
-     if (XSTRNCASECMP(&buf[idx], "200 OK", 6) != 0)
-        return 0;
-    
-    idx += 8;
-
-    while (idx < httpBufSz && !stop) {
-        if (buf[idx] == '\r' && buf[idx+1] == '\n') {
-            stop = 1;
-            idx += 2;
-        }
-        else {
-            if (contentType == NULL &&
-                           XSTRNCASECMP(&buf[idx], "Content-Type:", 13) == 0) {
-                idx += 13;
-                if (buf[idx] == ' ') idx++;
-                if (XSTRNCASECMP(&buf[idx],
-                                       "application/ocsp-response", 25) != 0) {
-                    return 0;
-                }
-                idx += 27;
-            }
-            else if (contentLength == NULL &&
-                         XSTRNCASECMP(&buf[idx], "Content-Length:", 15) == 0) {
-                idx += 15;
-                if (buf[idx] == ' ') idx++;
-                while (buf[idx] >= '0' && buf[idx] <= '9' && idx < httpBufSz) {
-                    len = (len * 10) + (buf[idx] - '0');
-                    idx++;
-                }
-                idx += 2; /* skip the crlf */
-            }
-            else {
-                /* Advance idx past the next \r\n */
-                char* end = XSTRSTR(&buf[idx], "\r\n");
-                idx = (int)(end - buf + 2);
-                stop = 1;
-            }
-        }
-    }
-    
-    if (len > 0) {
-        *dst = (byte*)XMALLOC(len, NULL, DYNAMIC_TYPE_IN_BUFFER);
-        XMEMCPY(*dst, httpBuf + idx, len);
-    }
-
-    return len;
-}
-
-
 static int decode_url(const char* url, int urlSz,
-    char* outName, char* outPath, int* outPort)
+    char* outName, char* outPath, word16* outPort)
 {
+    int result = -1;
+
     if (outName != NULL && outPath != NULL && outPort != NULL)
     {
         if (url == NULL || urlSz == 0)
@@ -626,14 +594,26 @@ static int decode_url(const char* url, int urlSz,
             int i, cur;
     
             /* need to break the url down into scheme, address, and port */
-            /* "http://example.com:8080/" */
+            /*     "http://example.com:8080/" */
+            /*     "http://[::1]:443/"        */
             if (XSTRNCMP(url, "http://", 7) == 0) {
                 cur = 7;
             } else cur = 0;
     
             i = 0;
-            while (url[cur] != 0 && url[cur] != ':' && url[cur] != '/') {
-                outName[i++] = url[cur++];
+            if (url[cur] == '[') {
+                cur++;
+                /* copy until ']' */
+                while (url[cur] != 0 && url[cur] != ']' && cur < urlSz) {
+                    outName[i++] = url[cur++];
+                }
+                cur++; /* skip ']' */
+            }
+            else {
+                while (url[cur] != 0 && url[cur] != ':' &&
+                                               url[cur] != '/' && cur < urlSz) {
+                    outName[i++] = url[cur++];
+                }
             }
             outName[i] = 0;
             /* Need to pick out the path after the domain name */
@@ -641,6 +621,7 @@ static int decode_url(const char* url, int urlSz,
             if (cur < urlSz && url[cur] == ':') {
                 char port[6];
                 int j;
+                word32 bigPort = 0;
                 i = 0;
                 cur++;
                 while (cur < urlSz && url[cur] != 0 && url[cur] != '/' &&
@@ -648,11 +629,11 @@ static int decode_url(const char* url, int urlSz,
                     port[i++] = url[cur++];
                 }
     
-                *outPort = 0;
                 for (j = 0; j < i; j++) {
                     if (port[j] < '0' || port[j] > '9') return -1;
-                    *outPort = (*outPort * 10) + (port[j] - '0');
+                    bigPort = (bigPort * 10) + (port[j] - '0');
                 }
+                *outPort = (word16)bigPort;
             }
             else
                 *outPort = 80;
@@ -668,20 +649,141 @@ static int decode_url(const char* url, int urlSz,
                 outPath[0] = '/';
                 outPath[1] = 0;
             }
+            result = 0;
         }
     }
 
-    return 0;
+    return result;
 }
 
 
-#define SCRATCH_BUFFER_SIZE 2048
+/* return: >0 OCSP Response Size
+ *         -1 error */
+static int process_http_response(int sfd, byte** respBuf,
+                                                  byte* httpBuf, int httpBufSz)
+{
+    int result;
+    int len = 0;
+    char *start, *end;
+    byte *recvBuf = NULL;
+    int recvBufSz = 0;
+    enum phr_state { phr_init, phr_http_start, phr_have_length,
+                     phr_have_type, phr_wait_end, phr_http_end
+    } state = phr_init;
+
+    start = end = NULL;
+    do {
+        if (end == NULL) {
+            result = (int)recv(sfd, (char*)httpBuf+len, httpBufSz-len-1, 0);
+            if (result > 0) {
+                len += result;
+                start = (char*)httpBuf;
+                start[len] = 0;
+            }
+            else {
+                CYASSL_MSG("process_http_response recv http from peer failed");
+                return -1;
+            }
+        }
+        end = XSTRSTR(start, "\r\n");
+
+        if (end == NULL) {
+            if (len != 0)
+                XMEMMOVE(httpBuf, start, len);
+            start = end = NULL;
+        }
+        else if (end == start) {
+            if (state == phr_wait_end) {
+                state = phr_http_end;
+                len -= 2;
+                start += 2;
+             }
+             else {
+                CYASSL_MSG("process_http_response header ended early");
+                return -1;
+             }
+        }
+        else {
+            *end = 0;
+            len -= (int)(end - start) + 2;
+                /* adjust len to remove the first line including the /r/n */
+
+            if (XSTRNCASECMP(start, "HTTP/1", 6) == 0) {
+                start += 9;
+                if (XSTRNCASECMP(start, "200 OK", 6) != 0 ||
+                                                           state != phr_init) {
+                    CYASSL_MSG("process_http_response not OK");
+                    return -1;
+                }
+                state = phr_http_start;
+            }
+            else if (XSTRNCASECMP(start, "Content-Type:", 13) == 0) {
+                start += 13;
+                while (*start == ' ' && *start != '\0') start++;
+                if (XSTRNCASECMP(start, "application/ocsp-response", 25) != 0) {
+                    CYASSL_MSG("process_http_response not ocsp-response");
+                    return -1;
+                }
+                
+                if (state == phr_http_start) state = phr_have_type;
+                else if (state == phr_have_length) state = phr_wait_end;
+                else {
+                    CYASSL_MSG("process_http_response type invalid state");
+                    return -1;
+                }
+            }
+            else if (XSTRNCASECMP(start, "Content-Length:", 15) == 0) {
+                start += 15;
+                while (*start == ' ' && *start != '\0') start++;
+                recvBufSz = atoi(start);
+
+                if (state == phr_http_start) state = phr_have_length;
+                else if (state == phr_have_type) state = phr_wait_end;
+                else {
+                    CYASSL_MSG("process_http_response length invalid state");
+                    return -1;
+                }
+            }
+            
+            start = end + 2;
+        }
+    } while (state != phr_http_end);
+
+    recvBuf = XMALLOC(recvBufSz, NULL, DYNAMIC_TYPE_IN_BUFFER);
+    if (recvBuf == NULL) {
+        CYASSL_MSG("process_http_response couldn't create response buffer");
+        return -1;
+    }
+
+    /* copy the remainder of the httpBuf into the respBuf */
+    if (len != 0)
+        XMEMCPY(recvBuf, start, len);
+
+    /* receive the OCSP response data */
+    do {
+        result = (int)recv(sfd, (char*)recvBuf+len, recvBufSz-len, 0);
+        if (result > 0)
+            len += result;
+        else {
+            CYASSL_MSG("process_http_response recv ocsp from peer failed");
+            return -1;
+        }
+    } while (len != recvBufSz);
+
+    *respBuf = recvBuf;
+    return recvBufSz;
+}
+
+
+#define SCRATCH_BUFFER_SIZE 512
 
 int EmbedOcspLookup(void* ctx, const char* url, int urlSz,
                         byte* ocspReqBuf, int ocspReqSz, byte** ocspRespBuf)
 {
     char domainName[80], path[80];
-    int port, httpBufSz, sfd = -1;
+    int httpBufSz;
+    SOCKET_T sfd = 0;
+    word16 port;
     int ocspRespSz = 0;
     byte* httpBuf = NULL;
 
@@ -702,6 +804,8 @@ int EmbedOcspLookup(void* ctx, const char* url, int urlSz,
         return -1;
     }
     
+    /* Note, the library uses the EmbedOcspRespFree() callback to
+     * free this buffer. */
     httpBufSz = SCRATCH_BUFFER_SIZE;
     httpBuf = (byte*)XMALLOC(httpBufSz, NULL, DYNAMIC_TYPE_IN_BUFFER);
 
@@ -709,35 +813,34 @@ int EmbedOcspLookup(void* ctx, const char* url, int urlSz,
         CYASSL_MSG("Unable to create OCSP response buffer");
         return -1;
     }
-    *ocspRespBuf = httpBuf;
 
     httpBufSz = build_http_request(domainName, path, ocspReqSz,
                                                         httpBuf, httpBufSz);
 
     if ((tcp_connect(&sfd, domainName, port) == 0) && (sfd > 0)) {
         int written;
-        written = (int)write(sfd, httpBuf, httpBufSz);
+        written = (int)send(sfd, (char*)httpBuf, httpBufSz, 0);
         if (written == httpBufSz) {
-            written = (int)write(sfd, ocspReqBuf, ocspReqSz);
+            written = (int)send(sfd, (char*)ocspReqBuf, ocspReqSz, 0);
             if (written == ocspReqSz) {
-                httpBufSz = (int)read(sfd, httpBuf, SCRATCH_BUFFER_SIZE);
-                if (httpBufSz > 0) {
-                    ocspRespSz = decode_http_response(httpBuf, httpBufSz,
-                        ocspRespBuf);
-                }
+                ocspRespSz = process_http_response(sfd, ocspRespBuf,
+                                                 httpBuf, SCRATCH_BUFFER_SIZE);
             }
         }
         close(sfd);
         if (ocspRespSz == 0) {
             CYASSL_MSG("OCSP response was not OK, no OCSP response");
+            XFREE(httpBuf, NULL, DYNAMIC_TYPE_IN_BUFFER);
             return -1;
         }
     } else {
         CYASSL_MSG("OCSP Responder connection failed");
         close(sfd);
+        XFREE(httpBuf, NULL, DYNAMIC_TYPE_IN_BUFFER);
         return -1;
     }
 
+    XFREE(httpBuf, NULL, DYNAMIC_TYPE_IN_BUFFER);
     return ocspRespSz;
 }
 
@@ -779,6 +882,24 @@ CYASSL_API void CyaSSL_SetIOWriteCtx(CYASSL* ssl, void *wctx)
 }
 
 
+CYASSL_API void* CyaSSL_GetIOReadCtx(CYASSL* ssl)
+{
+    if (ssl)
+        return ssl->IOCB_ReadCtx;
+
+    return NULL;
+}
+
+
+CYASSL_API void* CyaSSL_GetIOWriteCtx(CYASSL* ssl)
+{
+    if (ssl)
+        return ssl->IOCB_WriteCtx;
+
+    return NULL;
+}
+
+
 CYASSL_API void CyaSSL_SetIOReadFlags(CYASSL* ssl, int flags)
 {
     ssl->rflags = flags; 
@@ -804,25 +925,123 @@ CYASSL_API void CyaSSL_SetCookieCtx(CYASSL* ssl, void *ctx)
 	ssl->IOCB_CookieCtx = ctx;
 }
 
+
+CYASSL_API void* CyaSSL_GetCookieCtx(CYASSL* ssl)
+{
+    if (ssl)
+	    return ssl->IOCB_CookieCtx;
+
+    return NULL;
+}
+
 #endif /* CYASSL_DTLS */
 
 
-#ifdef HAVE_OCSP
+#ifdef HAVE_NETX
 
-CYASSL_API void CyaSSL_SetIOOcsp(CYASSL_CTX* ctx, CallbackIOOcsp cb)
+/* The NetX receive callback
+ *  return :  bytes read, or error
+ */
+int NetX_Receive(CYASSL *ssl, char *buf, int sz, void *ctx)
 {
-    ctx->ocsp.CBIOOcsp = cb;
+    NetX_Ctx* nxCtx = (NetX_Ctx*)ctx;
+    ULONG left;
+    ULONG total;
+    ULONG copied = 0;
+    UINT  status;
+
+    if (nxCtx == NULL || nxCtx->nxSocket == NULL) {
+        CYASSL_MSG("NetX Recv NULL parameters");
+        return CYASSL_CBIO_ERR_GENERAL;
+    }
+
+    if (nxCtx->nxPacket == NULL) {
+        status = nx_tcp_socket_receive(nxCtx->nxSocket, &nxCtx->nxPacket,
+                                       nxCtx->nxWait);
+        if (status != NX_SUCCESS) {
+            CYASSL_MSG("NetX Recv receive error");
+            return CYASSL_CBIO_ERR_GENERAL;
+        }
+    }
+
+    if (nxCtx->nxPacket) {
+        status = nx_packet_length_get(nxCtx->nxPacket, &total);
+        if (status != NX_SUCCESS) {
+            CYASSL_MSG("NetX Recv length get error");
+            return CYASSL_CBIO_ERR_GENERAL;
+        }
+
+        left = total - nxCtx->nxOffset;
+        status = nx_packet_data_extract_offset(nxCtx->nxPacket, nxCtx->nxOffset,
+                                               buf, sz, &copied);
+        if (status != NX_SUCCESS) {
+            CYASSL_MSG("NetX Recv data extract offset error");
+            return CYASSL_CBIO_ERR_GENERAL;
+        }
+
+        nxCtx->nxOffset += copied;
+
+        if (copied == left) {
+            CYASSL_MSG("NetX Recv Drained packet");
+            nx_packet_release(nxCtx->nxPacket);
+            nxCtx->nxPacket = NULL;
+            nxCtx->nxOffset = 0;
+        }
+    }
+
+    return copied;
 }
 
-CYASSL_API void CyaSSL_SetIOOcspRespFree(CYASSL_CTX* ctx,
-                                                     CallbackIOOcspRespFree cb)
+
+/* The NetX send callback
+ *  return : bytes sent, or error
+ */
+int NetX_Send(CYASSL* ssl, char *buf, int sz, void *ctx)
 {
-    ctx->ocsp.CBIOOcspRespFree = cb;
+    NetX_Ctx*       nxCtx = (NetX_Ctx*)ctx;
+    NX_PACKET*      packet;
+    NX_PACKET_POOL* pool;   /* shorthand */
+    UINT            status;
+
+    if (nxCtx == NULL || nxCtx->nxSocket == NULL) {
+        CYASSL_MSG("NetX Send NULL parameters");
+        return CYASSL_CBIO_ERR_GENERAL;
+    }
+
+    pool = nxCtx->nxSocket->nx_tcp_socket_ip_ptr->nx_ip_default_packet_pool;
+    status = nx_packet_allocate(pool, &packet, NX_TCP_PACKET,
+                                nxCtx->nxWait);
+    if (status != NX_SUCCESS) {
+        CYASSL_MSG("NetX Send packet alloc error");
+        return CYASSL_CBIO_ERR_GENERAL;
+    }
+
+    status = nx_packet_data_append(packet, buf, sz, pool, nxCtx->nxWait);
+    if (status != NX_SUCCESS) {
+        nx_packet_release(packet);
+        CYASSL_MSG("NetX Send data append error");
+        return CYASSL_CBIO_ERR_GENERAL;
+    }
+
+    status = nx_tcp_socket_send(nxCtx->nxSocket, packet, nxCtx->nxWait);
+    if (status != NX_SUCCESS) {
+        nx_packet_release(packet);
+        CYASSL_MSG("NetX Send socket send error");
+        return CYASSL_CBIO_ERR_GENERAL;
+    }
+
+    return sz;
 }
 
-CYASSL_API void CyaSSL_SetIOOcspCtx(CYASSL_CTX* ctx, void *octx)
+
+/* like set_fd, but for default NetX context */
+void CyaSSL_SetIO_NetX(CYASSL* ssl, NX_TCP_SOCKET* nxSocket, ULONG waitOption)
 {
-    ctx->ocsp.IOCB_OcspCtx = octx;
+    if (ssl) {
+        ssl->nxCtx.nxSocket = nxSocket;
+        ssl->nxCtx.nxWait   = waitOption;
+    }
 }
 
-#endif
+#endif /* HAVE_NETX */
+

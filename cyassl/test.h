@@ -10,15 +10,30 @@
 #include <cyassl/ssl.h>
 #include <cyassl/ctaocrypt/types.h>
 
+#ifdef ATOMIC_USER
+    #include <cyassl/ctaocrypt/aes.h>
+    #include <cyassl/ctaocrypt/arc4.h>
+    #include <cyassl/ctaocrypt/hmac.h>
+#endif
+#ifdef HAVE_PK_CALLBACKS
+    #include <cyassl/ctaocrypt/random.h>
+    #include <cyassl/ctaocrypt/asn.h>
+    #ifdef HAVE_ECC
+        #include <cyassl/ctaocrypt/ecc.h>
+    #endif /* HAVE_ECC */
+#endif /*HAVE_PK_CALLBACKS */
+
 #ifdef USE_WINDOWS_API 
     #include <winsock2.h>
     #include <process.h>
     #ifdef TEST_IPV6            /* don't require newer SDK for IPV4 */
-	    #include <ws2tcpip.h>
+        #include <ws2tcpip.h>
         #include <wspiapi.h>
     #endif
     #define SOCKET_T SOCKET
     #define SNPRINTF _snprintf
+#elif defined(CYASSL_MDK_ARM)
+    #include <string.h>
 #else
     #include <string.h>
     #include <sys/types.h>
@@ -66,7 +81,7 @@
 
 /* HPUX doesn't use socklent_t for third parameter to accept, unless
    _XOPEN_SOURCE_EXTENDED is defined */
-#if !defined(__hpux__)
+#if !defined(__hpux__) && !defined(CYASSL_MDK_ARM)
     typedef socklen_t* ACCEPT_THIRD_T;
 #else
     #if defined _XOPEN_SOURCE_EXTENDED
@@ -80,6 +95,9 @@
 #ifdef USE_WINDOWS_API 
     #define CloseSocket(s) closesocket(s)
     #define StartTCP() { WSADATA wsd; WSAStartup(0x0002, &wsd); }
+#elif defined(CYASSL_MDK_ARM)
+    #define CloseSocket(s) closesocket(s)
+    #define StartTCP() 
 #else
     #define CloseSocket(s) close(s)
     #define StartTCP() 
@@ -97,6 +115,10 @@
         #define CYASSL_THREAD
         #define INFINITE -1
         #define WAIT_OBJECT_0 0L
+    #elif defined(CYASSL_MDK_ARM)
+        typedef unsigned int  THREAD_RETURN;
+        typedef int           THREAD_TYPE;
+        #define CYASSL_THREAD
     #else
         typedef unsigned int  THREAD_RETURN;
         typedef intptr_t      THREAD_TYPE;
@@ -149,12 +171,23 @@ typedef struct tcp_ready {
 void InitTcpReady(tcp_ready*);
 void FreeTcpReady(tcp_ready*);
 
+typedef CYASSL_METHOD* (*method_provider)(void);
+typedef void (*ctx_callback)(CYASSL_CTX* ctx);
+typedef void (*ssl_callback)(CYASSL* ssl);
+
+typedef struct callback_functions {
+    method_provider method;
+    ctx_callback ctx_ready;
+    ssl_callback ssl_ready;
+    ssl_callback on_result;
+} callback_functions;
 
 typedef struct func_args {
     int    argc;
     char** argv;
     int    return_code;
     tcp_ready* signal;
+    callback_functions *callbacks;
 } func_args;
 
 void wait_tcp_ready(func_args*);
@@ -171,7 +204,6 @@ void join_thread(THREAD_TYPE);
     static const char* const yasslIP   = "::1";
 #endif
 static const word16      yasslPort = 11111;
-
 
 static INLINE void err_sys(const char* msg)
 {
@@ -278,7 +310,7 @@ static INLINE void ShowX509(CYASSL_X509* x509, const char* hdr)
         
     printf("%s\n issuer : %s\n subject: %s\n", hdr, issuer, subject);
 
-    while ( (altName = CyaSSL_X509_get_next_altname(x509)) )
+    while ( (altName = CyaSSL_X509_get_next_altname(x509)) != NULL)
         printf(" altname = %s\n", altName);
 
     ret = CyaSSL_X509_get_serial_number(x509, serial, &sz);
@@ -357,8 +389,13 @@ static INLINE void build_addr(SOCKADDR_IN_T* addr, const char* peer,
 
 #ifndef TEST_IPV6
     /* peer could be in human readable form */
-    if (peer != INADDR_ANY && isalpha((int)peer[0])) {
-        struct hostent* entry = gethostbyname(peer);
+    if ( (peer != INADDR_ANY) && isalpha((int)peer[0])) {
+        #ifdef CYASSL_MDK_ARM
+            int err;
+            struct hostent* entry = gethostbyname(peer, &err);
+        #else
+            struct hostent* entry = gethostbyname(peer);
+        #endif
 
         if (entry) {
             memcpy(&addr->sin_addr.s_addr, entry->h_addr_list[0],
@@ -372,7 +409,11 @@ static INLINE void build_addr(SOCKADDR_IN_T* addr, const char* peer,
 
 
 #ifndef TEST_IPV6
-    addr->sin_family = AF_INET_V;
+    #if defined(CYASSL_MDK_ARM)
+        addr->sin_family = PF_INET;
+    #else
+        addr->sin_family = AF_INET_V;
+    #endif
     addr->sin_port = htons(port);
     if (peer == INADDR_ANY)
         addr->sin_addr.s_addr = INADDR_ANY;
@@ -440,6 +481,8 @@ static INLINE void tcp_socket(SOCKET_T* sockfd, int udp)
         if (res < 0)
             err_sys("setsockopt SO_NOSIGPIPE failed\n");
     }
+#elif defined(CYASSL_MDK_ARM)
+    /* nothing to define */
 #else  /* no S_NOSIGPIPE */
     signal(SIGPIPE, SIG_IGN);
 #endif /* S_NOSIGPIPE */
@@ -456,7 +499,6 @@ static INLINE void tcp_socket(SOCKET_T* sockfd, int udp)
 #endif
 #endif  /* USE_WINDOWS_API */
 }
-
 
 static INLINE void tcp_connect(SOCKET_T* sockfd, const char* ip, word16 port,
                                int udp)
@@ -486,6 +528,8 @@ enum {
     TEST_ERROR_READY
 };
 
+
+#if !defined(CYASSL_MDK_ARM)
 static INLINE int tcp_select(SOCKET_T socketfd, int to_sec)
 {
     fd_set recvfds, errfds;
@@ -511,6 +555,7 @@ static INLINE int tcp_select(SOCKET_T socketfd, int to_sec)
 
     return TEST_SELECT_FAIL;
 }
+#endif /* !CYASSL_MDK_ARM */
 
 
 static INLINE void tcp_listen(SOCKET_T* sockfd, int* port, int useAnyAddr,
@@ -523,7 +568,7 @@ static INLINE void tcp_listen(SOCKET_T* sockfd, int* port, int useAnyAddr,
     build_addr(&addr, (useAnyAddr ? INADDR_ANY : yasslIP), *port, udp);
     tcp_socket(sockfd, udp);
 
-#ifndef USE_WINDOWS_API 
+#if !defined(USE_WINDOWS_API) && !defined(CYASSL_MDK_ARM)
     {
         int       res, on  = 1;
         socklen_t len = sizeof(on);
@@ -584,7 +629,7 @@ static INLINE void udp_accept(SOCKET_T* sockfd, SOCKET_T* clientfd,
     tcp_socket(sockfd, 1);
 
 
-#ifndef USE_WINDOWS_API 
+#if !defined(USE_WINDOWS_API) && !defined(CYASSL_MDK_ARM)
     {
         int       res, on  = 1;
         socklen_t len = sizeof(on);
@@ -670,6 +715,8 @@ static INLINE void tcp_set_nonblocking(SOCKET_T* sockfd)
         int ret = ioctlsocket(*sockfd, FIONBIO, &blocking);
         if (ret == SOCKET_ERROR)
             err_sys("ioctlsocket failed");
+    #elif defined(CYASSL_MDK_ARM)
+         /* non blocking not suppported, for now */ 
     #else
         int flags = fcntl(*sockfd, F_GETFL, 0);
         if (flags < 0)
@@ -753,6 +800,7 @@ static INLINE unsigned int my_psk_server_cb(CYASSL* ssl, const char* identity,
 
 #else
 
+#if !defined(CYASSL_MDK_ARM)
     #include <sys/time.h>
 
     static INLINE double current_time(void)
@@ -762,7 +810,8 @@ static INLINE unsigned int my_psk_server_cb(CYASSL* ssl, const char* identity,
 
         return (double)tv.tv_sec + (double)tv.tv_usec / 1000000;
     }
-
+        
+#endif
 #endif /* USE_WINDOWS_API */
 
 
@@ -812,7 +861,8 @@ static INLINE unsigned int my_psk_server_cb(CYASSL* ssl, const char* identity,
 
 static INLINE int myVerify(int preverify, CYASSL_X509_STORE_CTX* store)
 {
-    char buffer[80];
+    (void)preverify;
+    char buffer[CYASSL_MAX_ERROR_SZ];
 
 #ifdef OPENSSL_EXTRA
     CYASSL_X509* peer;
@@ -852,7 +902,6 @@ static INLINE void CRL_CallBack(const char* url)
 }
 
 #endif
-
 
 #ifndef NO_CERTS
 
@@ -984,6 +1033,8 @@ static INLINE int CurrentDir(const char* str)
     return 0;
 }
 
+#elif defined(CYASSL_MDK_ARM)
+    /* KEIL-RL File System does not support relative directry */
 #else
 
 #ifndef MAX_PATH
@@ -1178,7 +1229,7 @@ static INLINE void StackSizeCheck(func_args* args, thread_func tf)
     if (ret != 0) 
         err_sys("posix_memalign failed\n");        
 
-    memset(myStack, 0xee, stackSize);
+    memset(myStack, 0x01, stackSize);
 
     ret = pthread_attr_init(&myAttr);
     if (ret != 0)
@@ -1199,7 +1250,7 @@ static INLINE void StackSizeCheck(func_args* args, thread_func tf)
         err_sys("pthread_join failed");
 
     for (i = 0; i < stackSize; i++) {
-        if (myStack[i] != 0xee) {
+        if (myStack[i] != 0x01) {
             break;
         }
     }
@@ -1210,6 +1261,416 @@ static INLINE void StackSizeCheck(func_args* args, thread_func tf)
 
 
 #endif /* HAVE_STACK_SIZE */
+
+
+#ifdef STACK_TRAP
+
+/* good settings
+   --enable-debug --disable-shared C_EXTRA_FLAGS="-DUSER_TIME -DTFM_TIMING_RESISTANT -DPOSITIVE_EXP_ONLY -DSTACK_TRAP"
+
+*/
+
+#ifdef HAVE_STACK_SIZE
+    /* client only for now, setrlimit will fail if pthread_create() called */
+    /* STACK_SIZE does pthread_create() on client */
+    #error "can't use STACK_TRAP with STACK_SIZE, setrlimit will fail"
+#endif /* HAVE_STACK_SIZE */
+
+static INLINE void StackTrap(void)
+{
+    struct rlimit  rl;
+    if (getrlimit(RLIMIT_STACK, &rl) != 0)
+        err_sys("getrlimit failed");
+    printf("rlim_cur = %llu\n", rl.rlim_cur);
+    rl.rlim_cur = 1024*21;  /* adjust trap size here */
+    if (setrlimit(RLIMIT_STACK, &rl) != 0) {
+        perror("setrlimit");
+        err_sys("setrlimit failed");
+    }
+}
+
+#else /* STACK_TRAP */
+
+static INLINE void StackTrap(void)
+{
+}
+
+#endif /* STACK_TRAP */
+
+
+#ifdef ATOMIC_USER
+
+/* Atomic Encrypt Context example */
+typedef struct AtomicEncCtx {
+    int  keySetup;           /* have we done key setup yet */
+    Aes  aes;                /* for aes example */
+} AtomicEncCtx;
+
+
+/* Atomic Decrypt Context example */
+typedef struct AtomicDecCtx {
+    int  keySetup;           /* have we done key setup yet */
+    Aes  aes;                /* for aes example */
+} AtomicDecCtx;
+
+
+static INLINE int myMacEncryptCb(CYASSL* ssl, unsigned char* macOut, 
+       const unsigned char* macIn, unsigned int macInSz, int macContent, 
+       int macVerify, unsigned char* encOut, const unsigned char* encIn,
+       unsigned int encSz, void* ctx)
+{
+    int  ret;
+    Hmac hmac;
+    byte myInner[CYASSL_TLS_HMAC_INNER_SZ];
+    AtomicEncCtx* encCtx = (AtomicEncCtx*)ctx;
+    const char* tlsStr = "TLS";
+
+    /* example supports (d)tls aes */
+    if (CyaSSL_GetBulkCipher(ssl) != cyassl_aes) {
+        printf("myMacEncryptCb not using AES\n");
+        return -1;
+    }
+
+    if (strstr(CyaSSL_get_version(ssl), tlsStr) == NULL) {
+        printf("myMacEncryptCb not using (D)TLS\n");
+        return -1;
+    }
+
+    /* hmac, not needed if aead mode */
+    CyaSSL_SetTlsHmacInner(ssl, myInner, macInSz, macContent, macVerify);
+
+    HmacSetKey(&hmac, CyaSSL_GetHmacType(ssl),
+               CyaSSL_GetMacSecret(ssl, macVerify), CyaSSL_GetHmacSize(ssl));
+    HmacUpdate(&hmac, myInner, sizeof(myInner));
+    HmacUpdate(&hmac, macIn, macInSz);
+    HmacFinal(&hmac, macOut);
+
+
+    /* encrypt setup on first time */
+    if (encCtx->keySetup == 0) {
+        int   keyLen = CyaSSL_GetKeySize(ssl);
+        const byte* key;
+        const byte* iv;
+
+        if (CyaSSL_GetSide(ssl) == CYASSL_CLIENT_END) {
+            key = CyaSSL_GetClientWriteKey(ssl);
+            iv  = CyaSSL_GetClientWriteIV(ssl);
+        }
+        else {
+            key = CyaSSL_GetServerWriteKey(ssl);
+            iv  = CyaSSL_GetServerWriteIV(ssl);
+        }
+
+        ret = AesSetKey(&encCtx->aes, key, keyLen, iv, AES_ENCRYPTION);
+        if (ret != 0) {
+            printf("AesSetKey failed in myMacEncryptCb\n");
+            return ret;
+        }
+        encCtx->keySetup = 1;
+    }
+
+    /* encrypt */
+    return AesCbcEncrypt(&encCtx->aes, encOut, encIn, encSz);
+}
+
+
+static INLINE int myDecryptVerifyCb(CYASSL* ssl, 
+       unsigned char* decOut, const unsigned char* decIn,
+       unsigned int decSz, int macContent, int macVerify,
+       unsigned int* padSz, void* ctx)
+{
+    AtomicDecCtx* decCtx = (AtomicDecCtx*)ctx;
+    int ret      = 0;
+    int macInSz  = 0;
+    int ivExtra  = 0;
+    int digestSz = CyaSSL_GetHmacSize(ssl);
+    unsigned int pad     = 0;
+    unsigned int padByte = 0;
+    Hmac hmac;
+    byte myInner[CYASSL_TLS_HMAC_INNER_SZ];
+    byte verify[MAX_DIGEST_SIZE];
+    const char* tlsStr = "TLS";
+
+    /* example supports (d)tls aes */
+    if (CyaSSL_GetBulkCipher(ssl) != cyassl_aes) {
+        printf("myMacEncryptCb not using AES\n");
+        return -1;
+    }
+
+    if (strstr(CyaSSL_get_version(ssl), tlsStr) == NULL) {
+        printf("myMacEncryptCb not using (D)TLS\n");
+        return -1;
+    }
+
+    /*decrypt */
+    if (decCtx->keySetup == 0) {
+        int   keyLen = CyaSSL_GetKeySize(ssl);
+        const byte* key;
+        const byte* iv;
+
+        /* decrypt is from other side (peer) */
+        if (CyaSSL_GetSide(ssl) == CYASSL_SERVER_END) {
+            key = CyaSSL_GetClientWriteKey(ssl);
+            iv  = CyaSSL_GetClientWriteIV(ssl);
+        }
+        else {
+            key = CyaSSL_GetServerWriteKey(ssl);
+            iv  = CyaSSL_GetServerWriteIV(ssl);
+        }
+
+        ret = AesSetKey(&decCtx->aes, key, keyLen, iv, AES_DECRYPTION);
+        if (ret != 0) {
+            printf("AesSetKey failed in myDecryptVerifyCb\n");
+            return ret;
+        }
+        decCtx->keySetup = 1;
+    }
+
+    /* decrypt */
+    ret = AesCbcDecrypt(&decCtx->aes, decOut, decIn, decSz);
+
+    if (CyaSSL_GetCipherType(ssl) == CYASSL_AEAD_TYPE) {
+        *padSz = CyaSSL_GetAeadMacSize(ssl);
+        return 0; /* hmac, not needed if aead mode */
+    }
+
+    if (CyaSSL_GetCipherType(ssl) == CYASSL_BLOCK_TYPE) {
+        pad     = *(decOut + decSz - 1);
+        padByte = 1;
+        if (CyaSSL_IsTLSv1_1(ssl))
+            ivExtra = CyaSSL_GetCipherBlockSize(ssl);
+    }
+
+    *padSz  = CyaSSL_GetHmacSize(ssl) + pad + padByte;
+    macInSz = decSz - ivExtra - digestSz - pad - padByte;
+
+    CyaSSL_SetTlsHmacInner(ssl, myInner, macInSz, macContent, macVerify);
+
+    HmacSetKey(&hmac, CyaSSL_GetHmacType(ssl),
+               CyaSSL_GetMacSecret(ssl, macVerify), digestSz);
+    HmacUpdate(&hmac, myInner, sizeof(myInner));
+    HmacUpdate(&hmac, decOut + ivExtra, macInSz);
+    HmacFinal(&hmac, verify);
+
+    if (memcmp(verify, decOut + decSz - digestSz - pad - padByte,
+               digestSz) != 0) {
+        printf("myDecryptVerify verify failed\n");
+        return -1;
+    }
+
+    return ret;
+}
+
+
+static INLINE void SetupAtomicUser(CYASSL_CTX* ctx, CYASSL* ssl)
+{
+    AtomicEncCtx* encCtx;
+    AtomicDecCtx* decCtx;
+
+    encCtx = (AtomicEncCtx*)malloc(sizeof(AtomicEncCtx));
+    if (encCtx == NULL)
+        err_sys("AtomicEncCtx malloc failed");
+    memset(encCtx, 0, sizeof(AtomicEncCtx));
+
+    decCtx = (AtomicDecCtx*)malloc(sizeof(AtomicDecCtx));
+    if (decCtx == NULL) {
+        free(encCtx);
+        err_sys("AtomicDecCtx malloc failed");
+    }
+    memset(decCtx, 0, sizeof(AtomicDecCtx));
+
+    CyaSSL_CTX_SetMacEncryptCb(ctx, myMacEncryptCb);
+    CyaSSL_SetMacEncryptCtx(ssl, encCtx);
+
+    CyaSSL_CTX_SetDecryptVerifyCb(ctx, myDecryptVerifyCb);
+    CyaSSL_SetDecryptVerifyCtx(ssl, decCtx);
+}
+
+
+static INLINE void FreeAtomicUser(CYASSL* ssl)
+{
+    AtomicEncCtx* encCtx = CyaSSL_GetMacEncryptCtx(ssl);
+    AtomicDecCtx* decCtx = CyaSSL_GetDecryptVerifyCtx(ssl);
+
+    free(decCtx);
+    free(encCtx);
+}
+
+#endif /* ATOMIC_USER */
+
+
+#ifdef HAVE_PK_CALLBACKS
+
+#ifdef HAVE_ECC
+
+static INLINE int myEccSign(CYASSL* ssl, const byte* in, word32 inSz,
+        byte* out, word32* outSz, const byte* key, word32 keySz, void* ctx)
+{
+    RNG     rng;
+    int     ret;
+    word32  idx = 0;
+    ecc_key myKey;
+
+    (void)ssl;
+    (void)ctx;
+
+    InitRng(&rng);
+    ecc_init(&myKey);
+    
+    ret = EccPrivateKeyDecode(key, &idx, &myKey, keySz);    
+    if (ret == 0)
+        ret = ecc_sign_hash(in, inSz, out, outSz, &rng, &myKey);
+    ecc_free(&myKey);
+
+    return ret;
+}
+
+
+static INLINE int myEccVerify(CYASSL* ssl, const byte* sig, word32 sigSz,
+        const byte* hash, word32 hashSz, const byte* key, word32 keySz,
+        int* result, void* ctx)
+{
+    int     ret;
+    ecc_key myKey;
+
+    (void)ssl;
+    (void)ctx;
+
+    ecc_init(&myKey);
+    
+    ret = ecc_import_x963(key, keySz, &myKey);
+    if (ret == 0)
+        ret = ecc_verify_hash(sig, sigSz, hash, hashSz, result, &myKey);
+    ecc_free(&myKey);
+
+    return ret;
+}
+
+#endif /* HAVE_ECC */
+
+#ifndef NO_RSA
+
+static INLINE int myRsaSign(CYASSL* ssl, const byte* in, word32 inSz,
+        byte* out, word32* outSz, const byte* key, word32 keySz, void* ctx)
+{
+    RNG     rng;
+    int     ret;
+    word32  idx = 0;
+    RsaKey  myKey;
+
+    (void)ssl;
+    (void)ctx;
+
+    InitRng(&rng);
+    InitRsaKey(&myKey, NULL);
+    
+    ret = RsaPrivateKeyDecode(key, &idx, &myKey, keySz);    
+    if (ret == 0)
+        ret = RsaSSL_Sign(in, inSz, out, *outSz, &myKey, &rng);
+    if (ret > 0) {  /* save and convert to 0 success */
+        *outSz = ret;
+        ret = 0;
+    }
+    FreeRsaKey(&myKey);
+
+    return ret;
+}
+
+
+static INLINE int myRsaVerify(CYASSL* ssl, byte* sig, word32 sigSz,
+        byte** out,
+        const byte* key, word32 keySz,
+        void* ctx)
+{
+    int     ret;
+    word32  idx = 0;
+    RsaKey  myKey;
+
+    (void)ssl;
+    (void)ctx;
+
+    InitRsaKey(&myKey, NULL);
+    
+    ret = RsaPublicKeyDecode(key, &idx, &myKey, keySz);
+    if (ret == 0)
+        ret = RsaSSL_VerifyInline(sig, sigSz, out, &myKey);
+    FreeRsaKey(&myKey);
+
+    return ret;
+}
+
+
+static INLINE int myRsaEnc(CYASSL* ssl, const byte* in, word32 inSz,
+                           byte* out, word32* outSz, const byte* key,
+                           word32 keySz, void* ctx)
+{
+    int     ret;
+    word32  idx = 0;
+    RsaKey  myKey;
+    RNG     rng;
+
+    (void)ssl;
+    (void)ctx;
+
+    InitRng(&rng);
+    InitRsaKey(&myKey, NULL);
+    
+    ret = RsaPublicKeyDecode(key, &idx, &myKey, keySz);
+    if (ret == 0) {
+        ret = RsaPublicEncrypt(in, inSz, out, *outSz, &myKey, &rng);
+        if (ret > 0) {
+            *outSz = ret;
+            ret = 0;  /* reset to success */
+        }
+    }
+    FreeRsaKey(&myKey);
+
+    return ret;
+}
+
+static INLINE int myRsaDec(CYASSL* ssl, byte* in, word32 inSz,
+                           byte** out,
+                           const byte* key, word32 keySz, void* ctx)
+{
+    int     ret;
+    word32  idx = 0;
+    RsaKey  myKey;
+
+    (void)ssl;
+    (void)ctx;
+
+    InitRsaKey(&myKey, NULL);
+    
+    ret = RsaPrivateKeyDecode(key, &idx, &myKey, keySz);
+    if (ret == 0) {
+        ret = RsaPrivateDecryptInline(in, inSz, out, &myKey);
+    }
+    FreeRsaKey(&myKey);
+
+    return ret;
+}
+
+#endif /* NO_RSA */
+
+static INLINE void SetupPkCallbacks(CYASSL_CTX* ctx, CYASSL* ssl)
+{
+    (void)ctx;
+    (void)ssl;
+
+    #ifdef HAVE_ECC
+        CyaSSL_CTX_SetEccSignCb(ctx, myEccSign);
+        CyaSSL_CTX_SetEccVerifyCb(ctx, myEccVerify);
+    #endif /* HAVE_ECC */
+    #ifndef NO_RSA 
+        CyaSSL_CTX_SetRsaSignCb(ctx, myRsaSign);
+        CyaSSL_CTX_SetRsaVerifyCb(ctx, myRsaVerify);
+        CyaSSL_CTX_SetRsaEncCb(ctx, myRsaEnc);
+        CyaSSL_CTX_SetRsaDecCb(ctx, myRsaDec);
+    #endif /* NO_RSA */
+}
+
+#endif /* HAVE_PK_CALLBACKS */
+
 
 #if defined(__hpux__) || defined(__MINGW32__)
 

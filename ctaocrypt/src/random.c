@@ -39,6 +39,7 @@
     #ifdef NO_INLINE
         #include <cyassl/ctaocrypt/misc.h>
     #else
+        #define MISC_DUMM_FUNC misc_dummy_random
         #include <ctaocrypt/src/misc.c>
     #endif
 #endif
@@ -50,8 +51,8 @@
     #include <windows.h>
     #include <wincrypt.h>
 #else
-    #ifndef NO_DEV_RANDOM
-        #include <fcntl.h>
+    #if !defined(NO_DEV_RANDOM) && !defined(CYASSL_MDK_ARM) 
+            #include <fcntl.h>
         #ifndef EBSNET
             #include <unistd.h>
         #endif
@@ -60,7 +61,6 @@
     #endif
 #endif /* USE_WINDOWS_API */
 
-#if !defined( NO_CYASSL_RANDOM )
 
 #ifdef NO_RC4
 
@@ -415,7 +415,7 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 }
 
 
-#elif defined(THREADX) || defined(EBSNET)
+#elif defined(HAVE_RTP_SYS) || defined(EBSNET)
 
 #include "rtprand.h"   /* rtp_rand () */
 #include "rtptime.h"   /* rtp_get_system_msec() */
@@ -460,18 +460,25 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 
 #elif defined(MICROCHIP_PIC32)
 
-#include <peripheral/timer.h>
+#ifdef MICROCHIP_MPLAB_HARMONY
+    #define PIC32_SEED_COUNT _CP0_GET_COUNT
+#else
+    #if !defined(CYASSL_MICROCHIP_PIC32MZ)
+        #include <peripheral/timer.h>
+    #endif
+    #define PIC32_SEED_COUNT ReadCoreTimer
+#endif
 
 /* uses the core timer, in nanoseconds to seed srand */
 int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 {
     int i;
-    srand(ReadCoreTimer() * 25);
+    srand(PIC32_SEED_COUNT() * 25);
 
     for (i = 0; i < sz; i++ ) {
         output[i] = rand() % 256;
         if ( (i % 8) == 7)
-            srand(ReadCoreTimer() * 25);
+            srand(PIC32_SEED_COUNT() * 25);
     }
 
     return 0;
@@ -527,6 +534,45 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 
             return 0;
         }
+
+    #elif defined(FREESCALE_K53_RNGB)
+        /*
+         * Generates a RNG seed using the Random Number Generator (RNGB)
+         * on the Kinetis K53. Documentation located in Chapter 33 of
+         * K53 Sub-Family Reference Manual (see note in the README for link).
+         */
+        int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
+        {
+            int i;
+
+            /* turn on RNGB module */
+            SIM_SCGC3 |= SIM_SCGC3_RNGB_MASK;
+
+            /* reset RNGB */
+            RNG_CMD |= RNG_CMD_SR_MASK;
+
+            /* FIFO generate interrupt, return all zeros on underflow,
+             * set auto reseed */
+            RNG_CR |= (RNG_CR_FUFMOD_MASK | RNG_CR_AR_MASK);
+
+            /* gen seed, clear interrupts, clear errors */
+            RNG_CMD |= (RNG_CMD_GS_MASK | RNG_CMD_CI_MASK | RNG_CMD_CE_MASK);
+
+            /* wait for seeding to complete */
+            while ((RNG_SR & RNG_SR_SDN_MASK) == 0) {}
+
+            for (i = 0; i < sz; i++) {
+
+                /* wait for a word to be available from FIFO */
+                while((RNG_SR & RNG_SR_FIFO_LVL_MASK) == 0) {}
+
+                /* get value */
+                output[i] = RNG_OUT;
+            }
+
+            return 0;
+        }
+
 	#else
         #warning "write a real random seed!!!!, just for testing now"
 
@@ -541,8 +587,9 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 	#endif /* FREESCALE_K70_RNGA */
 
 #elif defined(STM32F2_RNG)
-
+    #undef RNG
     #include "stm32f2xx_rng.h"
+    #include "stm32f2xx_rcc.h"
     /*
      * Generate a RNG seed using the hardware random number generator 
      * on the STM32F2. Documentation located in STM32F2xx Standard Peripheral 
@@ -568,13 +615,33 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 
         return 0;
     }
+#elif defined(CYASSL_LPC43xx) || defined(CYASSL_STM32F2xx)
+
+    #warning "write a real random seed!!!!, just for testing now"
+
+    int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
+    {
+        int i;
+
+        for (i = 0; i < sz; i++ )
+            output[i] = i;
+
+        return 0;
+    }
 
 #elif defined(NO_DEV_RANDOM)
 
-#warning "you need to write an os specific GenerateSeed() here"
+#error "you need to write an os specific GenerateSeed() here"
+
+/*
+int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
+{
+    return 0;
+}
+*/
 
 
-#else /* !USE_WINDOWS_API && !THREADX && !MICRIUM && !NO_DEV_RANDOM */
+#else /* !USE_WINDOWS_API && !HAVE_RPT_SYS && !MICRIUM && !NO_DEV_RANDOM */
 
 
 /* may block */
@@ -616,4 +683,3 @@ int GenerateSeed(OS_Seed* os, byte* output, word32 sz)
 
 #endif /* USE_WINDOWS_API */
 
-#endif /* NO_CYASSL_RANDOM */

@@ -104,14 +104,20 @@ static void RABBIT_next_state(RabbitCtx* ctx)
 
 
 /* IV setup */
-static void RabbitSetIV(Rabbit* ctx, const byte* iv)
+static void RabbitSetIV(Rabbit* ctx, const byte* inIv)
 {
     /* Temporary variables */
     word32 i0, i1, i2, i3, i;
+    word32 iv[2];
+
+    if (inIv)
+        XMEMCPY(iv, inIv, sizeof(iv));
+    else
+        XMEMSET(iv,    0, sizeof(iv));
       
     /* Generate four subvectors */
-    i0 = LITTLE32(*(word32*)(iv+0));
-    i2 = LITTLE32(*(word32*)(iv+4));
+    i0 = LITTLE32(iv[0]);
+    i2 = LITTLE32(iv[1]);
     i1 = (i0>>16) | (i2&0xFFFF0000);
     i3 = (i2<<16) | (i0&0x0000FFFF);
 
@@ -186,7 +192,7 @@ static INLINE int DoKey(Rabbit* ctx, const byte* key, const byte* iv)
     }
     ctx->workCtx.carry = ctx->masterCtx.carry;
 
-    if (iv) RabbitSetIV(ctx, iv);
+    RabbitSetIV(ctx, iv);
 
     return 0;
 }
@@ -196,17 +202,13 @@ static INLINE int DoKey(Rabbit* ctx, const byte* key, const byte* iv)
 int RabbitSetKey(Rabbit* ctx, const byte* key, const byte* iv)
 {
 #ifdef XSTREAM_ALIGN
-    if ((word)key % 4 || (iv && (word)iv % 4)) {
+    if ((word)key % 4) {
         int alignKey[4];
-        int alignIv[2];
 
-        CYASSL_MSG("RabbitSetKey unaligned key/iv");
+        /* iv aligned in SetIV */
+        CYASSL_MSG("RabbitSetKey unaligned key");
 
         XMEMCPY(alignKey, key, sizeof(alignKey));
-        if (iv) {
-            XMEMCPY(alignIv,  iv,  sizeof(alignIv));
-            iv = (const byte*)alignIv;
-        }
 
         return DoKey(ctx, (const byte*)alignKey, iv);
     }
@@ -249,25 +251,27 @@ static INLINE int DoProcess(Rabbit* ctx, byte* output, const byte* input,
     if (msglen) {
 
         word32 i;
-        byte   buffer[16];
+        word32 tmp[4];
+        byte*  buffer = (byte*)tmp;
+
+        XMEMSET(tmp, 0, sizeof(tmp));   /* help static analysis */
 
         /* Iterate the system */
         RABBIT_next_state(&(ctx->workCtx));
 
         /* Generate 16 bytes of pseudo-random data */
-        *(word32*)(buffer+ 0) = LITTLE32(ctx->workCtx.x[0] ^
+        tmp[0] = LITTLE32(ctx->workCtx.x[0] ^
                   (ctx->workCtx.x[5]>>16) ^ U32V(ctx->workCtx.x[3]<<16));
-        *(word32*)(buffer+ 4) = LITTLE32(ctx->workCtx.x[2] ^ 
+        tmp[1] = LITTLE32(ctx->workCtx.x[2] ^ 
                   (ctx->workCtx.x[7]>>16) ^ U32V(ctx->workCtx.x[5]<<16));
-        *(word32*)(buffer+ 8) = LITTLE32(ctx->workCtx.x[4] ^ 
+        tmp[2] = LITTLE32(ctx->workCtx.x[4] ^ 
                   (ctx->workCtx.x[1]>>16) ^ U32V(ctx->workCtx.x[7]<<16));
-        *(word32*)(buffer+12) = LITTLE32(ctx->workCtx.x[6] ^ 
+        tmp[3] = LITTLE32(ctx->workCtx.x[6] ^ 
                   (ctx->workCtx.x[3]>>16) ^ U32V(ctx->workCtx.x[1]<<16));
 
         /* Encrypt/decrypt the data */
         for (i=0; i<msglen; i++)
-            output[i] = input[i] ^ buffer[i];  /* scan-build thinks buffer[i] */
-                                               /* is garbage, it is not! */ 
+            output[i] = input[i] ^ buffer[i];
     }
 
     return 0;
