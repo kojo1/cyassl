@@ -221,11 +221,15 @@ int benchmark_test(void *args)
 #ifdef BENCH_EMBEDDED
 const int numBlocks = 25;       /* how many kB/megs to test (en/de)cryption */
 const char blockType[] = "kB";  /* used in printf output */
-const int times     = 1;        /* public key iterations */
+const int ntimes      = 1;        /* public key iterations */
+const int genTimes   = 5;
+const int agreeTimes = 5;
 #else
 const int numBlocks = 5;
 const char blockType[] = "megs";
-const int times     = 100;
+const int ntimes      = 100;
+const int genTimes   = 100;
+const int agreeTimes = 100;
 #endif
 
 const byte key[] = 
@@ -738,15 +742,15 @@ void bench_rsa(void)
     
     start = current_time(1);
 
-    for (i = 0; i < times; i++)
+    for (i = 0; i < ntimes; i++)
         ret = RsaPublicEncrypt(message,len,enc,sizeof(enc), &rsaKey, &rng);
 
     total = current_time(0) - start;
-    each  = total / times;   /* per second   */
+    each  = total / ntimes;   /* per second   */
     milliEach = each * 1000; /* milliseconds */
 
     printf("RSA %d encryption took %6.2f milliseconds, avg over %d" 
-           " iterations\n", rsaKeySz, milliEach, times);
+           " iterations\n", rsaKeySz, milliEach, ntimes);
 
     if (ret < 0) {
         printf("Rsa Public Encrypt failed\n");
@@ -755,17 +759,17 @@ void bench_rsa(void)
 
     start = current_time(1);
 
-    for (i = 0; i < times; i++) {
+    for (i = 0; i < ntimes; i++) {
          byte  out[512];  /* for up to 4096 bit */
          RsaPrivateDecrypt(enc, (word32)ret, out, sizeof(out), &rsaKey);
     }
 
     total = current_time(0) - start;
-    each  = total / times;   /* per second   */
+    each  = total / ntimes;   /* per second   */
     milliEach = each * 1000; /* milliseconds */
 
     printf("RSA %d decryption took %6.2f milliseconds, avg over %d" 
-           " iterations\n", rsaKeySz, milliEach, times);
+           " iterations\n", rsaKeySz, milliEach, ntimes);
 
     FreeRsaKey(&rsaKey);
 #ifdef HAVE_CAVIUM
@@ -843,28 +847,28 @@ void bench_dh(void)
 
     start = current_time(1);
 
-    for (i = 0; i < times; i++)
+    for (i = 0; i < ntimes; i++)
         DhGenerateKeyPair(&dhKey, &rng, priv, &privSz, pub, &pubSz);
 
     total = current_time(0) - start;
-    each  = total / times;   /* per second   */
+    each  = total / ntimes;   /* per second   */
     milliEach = each * 1000; /* milliseconds */
 
     printf("DH  %d key generation  %6.2f milliseconds, avg over %d" 
-           " iterations\n", dhKeySz, milliEach, times);
+           " iterations\n", dhKeySz, milliEach, ntimes);
 
     DhGenerateKeyPair(&dhKey, &rng, priv2, &privSz2, pub2, &pubSz2);
     start = current_time(1);
 
-    for (i = 0; i < times; i++)
+    for (i = 0; i < ntimes; i++)
         DhAgree(&dhKey, agree, &agreeSz, priv, privSz, pub2, pubSz2);
 
     total = current_time(0) - start;
-    each  = total / times;   /* per second   */
+    each  = total / ntimes;   /* per second   */
     milliEach = each * 1000; /* milliseconds */
 
     printf("DH  %d key agreement   %6.2f milliseconds, avg over %d" 
-           " iterations\n", dhKeySz, milliEach, times);
+           " iterations\n", dhKeySz, milliEach, ntimes);
 
 #if !defined(USE_CERT_BUFFERS_1024) && !defined(USE_CERT_BUFFERS_2048)
     fclose(file);
@@ -879,7 +883,6 @@ void bench_rsaKeyGen(void)
     RsaKey genKey;
     double start, total, each, milliEach;
     int    i;
-    const int genTimes = 5;
   
     /* 1024 bit */ 
     start = current_time(1);
@@ -920,7 +923,6 @@ void bench_eccKeyGen(void)
     ecc_key genKey;
     double start, total, each, milliEach;
     int    i, ret;
-    const int genTimes = 5;
   
     ret = InitRng(&rng);
     if (ret < 0) {
@@ -949,7 +951,6 @@ void bench_eccKeyAgree(void)
     ecc_key genKey, genKey2;
     double start, total, each, milliEach;
     int    i, ret;
-    const int agreeTimes = 5;
     byte   shared[1024];
     byte   sig[1024];
     byte   digest[32];
@@ -1045,12 +1046,12 @@ void bench_eccKeyAgree(void)
 
     double current_time(int reset)
     {
-        (void)reset;
-
         static int init = 0;
         static LARGE_INTEGER freq;
     
         LARGE_INTEGER count;
+
+        (void)reset;
 
         if (!init) {
             QueryPerformanceFrequency(&freq);
@@ -1063,44 +1064,58 @@ void bench_eccKeyAgree(void)
     }
 
 #elif defined MICROCHIP_PIC32
-
-    #include <peripheral/timer.h>
+    #if defined(CYASSL_MICROCHIP_PIC32MZ)
+        #define CLOCK 8000000.0
+    #else
+        #include <peripheral/timer.h>
+        #define CLOCK 4000000.0
+    #endif
 
     double current_time(int reset)
     {
-        /* NOTE: core timer tick rate = 40 Mhz, 1 tick = 25 ns */
-
         unsigned int ns;
-
-        /* should we reset our timer back to zero? Helps prevent timer
-           rollover */
 
         if (reset) {
             WriteCoreTimer(0);
         }
 
         /* get timer in ns */
-        ns = ReadCoreTimer() * 25;
+        ns = ReadCoreTimer();
 
         /* return seconds as a double */
-        return ( ns / 1000000000.0 );
+        return ( ns / CLOCK * 2.0);
     }
-		
+
 #elif defined CYASSL_MDK_ARM
+
     extern double current_time(int reset) ;
+
+#elif defined FREERTOS
+
+    double current_time(int reset)
+    {
+        (void) reset;
+
+        portTickType tickCount;
+
+        /* tick count == ms, if configTICK_RATE_HZ is set to 1000 */
+        tickCount = xTaskGetTickCount();
+        return (double)tickCount / 1000;
+    }
+
 #else
 
     #include <sys/time.h>
 
     double current_time(int reset)
     {
-        (void) reset;
-
         struct timeval tv;
+
+        (void)reset;
+
         gettimeofday(&tv, 0);
 
         return (double)tv.tv_sec + (double)tv.tv_usec / 1000000;
     }
 
 #endif /* _WIN32 */
-

@@ -117,7 +117,7 @@
     #define RNG CyaSSL_RNG /*for avoiding name conflict in "stm32f2xx.h" */
     #define XTIME(tl)  (0)
     #define XGMTIME(c) Cyassl_MDK_gmtime((c))
-    #define XVALIDATE_DATE(d, f, t)  ValidateDate((d), (f), (t))
+    #define XVALIDATE_DATE(d, f, t)  (1)
 #elif defined(USER_TIME)
     /* user time, and gmtime compatible functions, there is a gmtime 
        implementation here that WINCE uses, so really just need some ticks
@@ -1566,8 +1566,7 @@ static int GetKey(DecodedCert* cert)
         default:
             return ASN_UNKNOWN_OID_E;
     }
-   
-    return 0;
+    return 0 ;
 }
 
 
